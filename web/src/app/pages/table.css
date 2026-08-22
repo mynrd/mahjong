@@ -1,0 +1,657 @@
+:host {
+  display: block;
+  min-height: 100dvh;
+}
+
+/* ------------------------------------------------------------------ layout skeleton
+   One grid, three arrangements. Phone portrait stacks everything; from 760px up the three
+   opponents move around the discard pool into the usual cross. The DOM never changes shape,
+   only where the pieces land, so nothing has to be re-rendered on rotation. */
+
+.table {
+  display: grid;
+  grid-template-areas:
+    'status'
+    'opponents'
+    'pool'
+    'mine'
+    'actions';
+  grid-template-rows: auto auto minmax(84px, 1fr) auto auto;
+  gap: 8px;
+  min-height: 100dvh;
+  padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
+
+  /* Every tile in the app sizes off this. */
+  --tile-w: 34px;
+  --tile-sm: 15px;
+  --tile-discard: 26px;
+}
+
+.status {
+  grid-area: status;
+}
+.opponents {
+  grid-area: opponents;
+}
+.pool {
+  grid-area: pool;
+}
+.mine {
+  grid-area: mine;
+}
+.actions {
+  grid-area: actions;
+}
+
+/* ------------------------------------------------------------------ status bar */
+
+.status {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 4px;
+  font-size: 12px;
+}
+
+.status .left {
+  display: flex;
+  gap: 10px;
+  white-space: nowrap;
+  color: var(--text-dim);
+}
+
+.status .right {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.status .hand {
+  font-weight: 700;
+  color: var(--text);
+}
+
+.joker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  --tile-w: 22px;
+}
+
+.joker em {
+  font-size: 10px;
+  font-style: normal;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--gold);
+}
+
+.chip {
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+}
+
+.chip.warn {
+  color: #ffe0a8;
+  background: rgba(255, 180, 60, 0.2);
+  border-color: rgba(255, 180, 60, 0.5);
+}
+
+/* ------------------------------------------------------------------ opponents */
+
+/* On a phone the three opponent cards get about a third of the width each, which is not enough
+   for a wind chip, a name, a bot tag and a balance on one line - the name ends up ellipsed to a
+   single letter. Below the breakpoint the name takes a line of its own. */
+.opponent .who {
+  flex-wrap: wrap;
+  row-gap: 3px;
+}
+
+.opponent .who .name {
+  flex: 1 1 100%;
+  order: -1;
+}
+
+.opponents {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.opponent {
+  padding: 7px 8px;
+  background: rgba(0, 0, 0, 0.24);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  min-width: 0;
+}
+
+/* Whose turn it is has to be obvious at a glance across the room. */
+.opponent.active {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 1px var(--gold) inset;
+}
+
+.who {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.who .wind {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  background: rgba(0, 0, 0, 0.4);
+  border-radius: 4px;
+}
+
+.who .name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.who .balance {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--ok);
+}
+
+.who .balance.down {
+  color: var(--danger);
+}
+
+.tag {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  font-size: 9.5px;
+  font-style: normal;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 20px;
+}
+
+.tag.you,
+.tag.mano {
+  color: var(--text-dark);
+  background: var(--gold);
+}
+
+.tag.away {
+  color: #ffd9d4;
+  background: rgba(224, 90, 76, 0.5);
+}
+
+.their-tiles {
+  margin-top: 6px;
+  display: grid;
+  gap: 5px;
+}
+
+.hidden-hand {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px;
+  --tile-w: var(--tile-sm);
+}
+
+.melds,
+.bonus {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  --tile-w: calc(var(--tile-sm) + 4px);
+}
+
+.meld {
+  display: flex;
+  gap: 1px;
+  padding: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+}
+
+.bonus {
+  opacity: 0.92;
+}
+
+/* ------------------------------------------------------------------ discard pool */
+
+.pool {
+  display: grid;
+  place-items: center;
+  position: relative;
+  padding: 10px 6px;
+  background: rgba(0, 0, 0, 0.16);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  min-height: 84px;
+}
+
+.discards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  justify-content: center;
+  align-content: flex-start;
+  --tile-w: var(--tile-discard);
+  max-height: 34vh;
+  overflow-y: auto;
+}
+
+.empty {
+  font-size: 13px;
+}
+
+/* ------------------------------------------------------------------ your area */
+
+.mine {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.my-turn .mine {
+  border-color: var(--gold);
+}
+
+.my-exposed {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  --tile-w: 22px;
+}
+
+.hand {
+  display: flex;
+  gap: 2px;
+  /* A 17-tile hand does not fit across a phone, so it scrolls sideways rather than shrinking to
+     the point of being unreadable. */
+  overflow-x: auto;
+  overflow-y: visible;
+  padding: 12px 2px 4px;
+  scrollbar-width: thin;
+}
+
+.group,
+.group-tiles {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+
+.group {
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Auto Arrange puts a gap between blocks. Sized off the tile rather than in fixed pixels, because
+   the hand scrolls sideways at 360px and a fixed gap would push the last tile further out of view
+   than the tiles themselves warrant. */
+.hand.grouped {
+  gap: calc(var(--tile-w, 46px) * 0.34);
+}
+
+.group-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-align: center;
+  white-space: nowrap;
+  color: var(--text-dim);
+}
+
+.tile-button {
+  padding: 0;
+  background: none;
+  border: none;
+  /* Tiles are the primary touch target, so they get the full width rather than being padded in. */
+  min-width: var(--tile-w);
+  touch-action: manipulation;
+}
+
+.tile-button:disabled {
+  cursor: default;
+}
+
+.tile-button:focus-visible {
+  outline: 3px solid var(--gold);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* ------------------------------------------------------------------ action bar */
+
+.actions {
+  display: grid;
+  place-items: center;
+  min-height: 62px;
+  padding: 8px;
+  background: rgba(0, 0, 0, 0.34);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.prompt {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.my-turn .prompt {
+  color: var(--gold);
+}
+
+.turn,
+.claim {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.turn-buttons,
+.claim-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+
+.claim-tile {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  --tile-w: 34px;
+}
+
+.countdown {
+  font-size: 17px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--gold);
+}
+
+/* The claim the server would award if everyone grabbed at once, so the suggestion matches what
+   would actually happen. A label and a position in the row, never an auto-claim. */
+.btn.recommended {
+  box-shadow: 0 0 0 2px var(--gold);
+}
+
+.best {
+  margin-left: 6px;
+  padding: 1px 5px;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dark);
+  background: var(--gold);
+  border-radius: 20px;
+}
+
+.legend,
+.claim-invalid {
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.legend {
+  color: var(--text-dim);
+}
+
+.claim-invalid {
+  padding: 6px 10px;
+  font-size: 12.5px;
+  font-weight: 650;
+  color: #ffe3df;
+  background: rgba(180, 55, 43, 0.9);
+  border-radius: var(--radius-sm);
+}
+
+/* Runs down as the claim window closes, so the pressure is visible without reading the number. */
+.timer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -8px;
+  height: 3px;
+  background: var(--gold);
+  border-radius: 2px;
+  transform-origin: left;
+  transition: transform 250ms linear;
+}
+
+/* ------------------------------------------------------------------ overlays */
+
+/* Anchored inside the discard pool, which is the one part of the table that is empty early on
+   and never carries anything a player needs to read at a glance. */
+.toasts {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: grid;
+  gap: 5px;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.toasts p {
+  margin: 0;
+  padding: 7px 14px;
+  font-size: 13px;
+  background: rgba(0, 0, 0, 0.72);
+  border-radius: 20px;
+}
+
+.floating-error {
+  position: fixed;
+  bottom: 84px;
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 0;
+  padding: 9px 15px;
+  font-size: 13px;
+  color: #ffe3df;
+  background: rgba(180, 55, 43, 0.94);
+  border-radius: 20px;
+  z-index: 20;
+}
+
+.sheet {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(3px);
+  z-index: 30;
+}
+
+.sheet-body {
+  width: min(420px, 100%);
+  max-height: 86dvh;
+  overflow-y: auto;
+  background: #14402c;
+}
+
+.sheet-body h2 {
+  margin-bottom: 12px;
+  font-size: 20px;
+  text-align: center;
+}
+
+.total {
+  margin: 0 0 14px;
+  font-size: 30px;
+  font-weight: 800;
+  text-align: center;
+  color: var(--gold);
+}
+
+.breakdown,
+.scores {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.breakdown li,
+.scores li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 11px;
+  font-size: 14px;
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: var(--radius-sm);
+}
+
+.scores strong {
+  font-variant-numeric: tabular-nums;
+  color: var(--ok);
+}
+
+.scores strong.down {
+  color: var(--danger);
+}
+
+.loading {
+  display: grid;
+  place-items: center;
+  gap: 14px;
+  min-height: 100dvh;
+  padding: 20px;
+  text-align: center;
+}
+
+/* ------------------------------------------------------------------ bigger screens */
+
+@media (min-width: 760px) {
+  .table {
+    grid-template-areas:
+      'status status status'
+      'left across right'
+      'pool pool pool'
+      'mine mine mine'
+      'actions actions actions';
+    grid-template-columns: 1fr 1.1fr 1fr;
+    gap: 12px;
+    padding: 12px;
+
+    --tile-w: 52px;
+    --tile-sm: 19px;
+    --tile-discard: 34px;
+  }
+
+  .opponents {
+    display: contents;
+  }
+
+  .pos-left {
+    grid-area: left;
+  }
+  .pos-across {
+    grid-area: across;
+  }
+  .pos-right {
+    grid-area: right;
+  }
+
+  .opponent {
+    padding: 10px 12px;
+  }
+
+  /* There is room for the name, the wind, the tag and the balance on one line again. */
+  .opponent .who {
+    flex-wrap: nowrap;
+  }
+
+  .opponent .who .name {
+    flex: 1;
+    order: 0;
+  }
+
+  .who {
+    font-size: 13.5px;
+  }
+
+  .hand {
+    /* "safe" matters once Auto Arrange adds gaps: a plain centre on an overflowing flex row puts
+       the first tiles off the left edge where no amount of scrolling reaches them. */
+    justify-content: safe center;
+    padding-top: 16px;
+  }
+
+  .my-exposed {
+    --tile-w: 30px;
+    justify-content: center;
+  }
+
+  .discards {
+    max-width: 620px;
+    max-height: none;
+  }
+}
+
+@media (min-width: 1180px) {
+  .table {
+    max-width: 1180px;
+    margin: 0 auto;
+    --tile-w: 62px;
+    --tile-sm: 22px;
+    --tile-discard: 40px;
+  }
+
+  .pool {
+    min-height: 190px;
+  }
+}
+
+/* Landscape on a phone is short, so the pool gives up its height first. */
+@media (max-height: 520px) {
+  .table {
+    --tile-w: 40px;
+  }
+
+  .pool {
+    min-height: 56px;
+  }
+
+  .discards {
+    max-height: 22vh;
+  }
+}

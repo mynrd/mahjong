@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="400" viewBox="0 0 300 400">
+  <title>White dragon</title>
+  <!--
+    The white dragon. The tile set this project uses draws it as a completely blank face, which is
+    traditional but, on screen and next to 41 other faces, reads as a tile that failed to load. The
+    other common convention is a blue frame, which is what this is: unmistakably a face, and still
+    the emptiest tile on the table.
+  -->
+  <rect x="52" y="74" width="196" height="252" rx="10" fill="none" stroke="#1F3A93" stroke-width="14"/>
+  <rect x="78" y="100" width="144" height="200" rx="5" fill="none" stroke="#1F3A93" stroke-width="7"/>
+</svg>

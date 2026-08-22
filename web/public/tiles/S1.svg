@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="400" viewBox="0 0 300 400">
+  <title>Spring</title>
+  <text x="54" y="76" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="66"
+        font-weight="700" fill="#C0392B" text-anchor="middle">1</text>
+  <g transform="translate(150 226) scale(1.42)">
+    <path d="M 0 90 L 0 -30" stroke="#2E7D32" stroke-width="12" stroke-linecap="round"/>
+    <path d="M 0 22 C -70 12 -84 -40 -30 -50 C 6 -44 8 -6 0 22 Z" fill="#66BB6A" stroke="#1B5E20" stroke-width="4"/>
+    <path d="M 0 -4 C 70 -14 84 -66 30 -76 C -6 -70 -8 -32 0 -4 Z" fill="#43A047" stroke="#1B5E20" stroke-width="4"/>
+    <circle cx="0" cy="-56" r="16" fill="#F4C542" stroke="#B8860B" stroke-width="3"/>
+  </g>
+</svg>

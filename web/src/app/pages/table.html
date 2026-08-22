@@ -1,0 +1,364 @@
+@if (view(); as view) {
+  <div class="table" [class.my-turn]="isMyTurn()" data-testid="table">
+    <!-- ---------------------------------------------------------------- status bar -->
+    <header class="status">
+      <div class="left">
+        <span class="hand">Hand {{ view.handNumber }}</span>
+        <span class="wall" data-testid="tiles-remaining">{{ view.tilesRemaining }} left</span>
+      </div>
+
+      <div class="centre">
+        @if (view.joker; as joker) {
+          <span class="joker" data-testid="joker">
+            <span class="sr-only">Joker this hand:</span>
+            <mj-tile [code]="joker" />
+            <em>joker</em>
+          </span>
+        }
+      </div>
+
+      <div class="right">
+        <button class="chip" type="button" (click)="showScores.set(!showScores())" data-testid="toggle-scores">
+          Scores
+        </button>
+        @if (connection() !== 'connected') {
+          <span class="chip warn" data-testid="connection">{{ connection() }}</span>
+        }
+      </div>
+    </header>
+
+    <!-- ---------------------------------------------------------------- opponents -->
+    <section class="opponents">
+      @for (opponent of [leftSeat(), acrossSeat(), rightSeat()]; track opponent?.seat; let i = $index) {
+        @if (opponent) {
+          <article
+            class="opponent"
+            [class.pos-left]="i === 0"
+            [class.pos-across]="i === 1"
+            [class.pos-right]="i === 2"
+            [class.active]="opponent.seat === view.currentSeat"
+            [attr.data-seat]="opponent.seat"
+            [attr.data-testid]="'opponent-' + opponent.seat"
+          >
+            <div class="who">
+              <span class="wind">{{ windOf(opponent.seat) }}</span>
+              <span class="name">{{ opponent.displayName }}</span>
+              @if (opponent.isBot) {
+                <em class="tag">bot</em>
+              }
+              @if (!opponent.isConnected && !opponent.isBot) {
+                <em class="tag away">away</em>
+              }
+              <span class="balance" [class.down]="opponent.balance < 0">
+                {{ opponent.balance > 0 ? '+' : '' }}{{ opponent.balance }}
+              </span>
+            </div>
+
+            <div class="their-tiles">
+              <div class="hidden-hand" [attr.data-testid]="'opponent-' + opponent.seat + '-count'">
+                @for (n of repeat(opponent.concealedCount); track n) {
+                  <mj-tile code="back" />
+                }
+              </div>
+
+              @if (opponent.melds.length) {
+                <div class="melds">
+                  @for (meld of opponent.melds; track $index) {
+                    <div class="meld">
+                      @for (face of meldFaces(meld, false); track $index) {
+                        <mj-tile [code]="face" [joker]="isJoker(face)" />
+                      }
+                    </div>
+                  }
+                </div>
+              }
+
+              @if (opponent.bonus.length) {
+                <div class="bonus" [attr.data-testid]="'opponent-' + opponent.seat + '-bonus'">
+                  @for (tile of opponent.bonus; track tile.id) {
+                    <mj-tile [code]="tile.code" />
+                  }
+                </div>
+              }
+            </div>
+          </article>
+        }
+      }
+    </section>
+
+    <!-- ---------------------------------------------------------------- discard pool -->
+    <section class="pool" data-testid="discard-pool">
+      @if (view.discards.length === 0) {
+        <p class="muted empty">No tiles thrown yet.</p>
+      } @else {
+        <div class="discards">
+          @for (discard of view.discards; track discard.tile.id) {
+            <mj-tile
+              [code]="discard.tile.code"
+              [dimmed]="discard.claimed"
+              [highlight]="discard.tile.id === liveDiscard()?.tile?.id"
+              [joker]="isJoker(discard.tile.code)"
+            />
+          }
+        </div>
+      }
+
+      @if (messages().length) {
+        <div class="toasts">
+          @for (message of messages(); track message.id) {
+            <p>{{ message.text }}</p>
+          }
+        </div>
+      }
+    </section>
+
+    <!-- ---------------------------------------------------------------- your area -->
+    <section class="mine">
+      @if (me(); as me) {
+        <div class="who">
+          <span class="wind">{{ windOf(me.seat) }}</span>
+          <span class="name">{{ me.displayName }}</span>
+          <em class="tag you">you</em>
+          @if (view.manoSeat === me.seat) {
+            <em class="tag mano">mano</em>
+          }
+          <span class="balance" [class.down]="me.balance < 0" data-testid="my-balance">
+            {{ me.balance > 0 ? '+' : '' }}{{ me.balance }}
+          </span>
+          <button
+            class="chip"
+            type="button"
+            (click)="toggleArrange()"
+            [attr.aria-pressed]="arranged()"
+            data-testid="auto-arrange"
+          >
+            Auto Arrange
+          </button>
+        </div>
+
+        @if (me.melds.length || me.bonus.length) {
+          <div class="my-exposed">
+            @for (meld of me.melds; track $index) {
+              <div class="meld" [attr.data-testid]="'my-meld'">
+                @for (face of meldFaces(meld, true); track $index) {
+                  <mj-tile [code]="face" [joker]="isJoker(face)" />
+                }
+              </div>
+            }
+            @if (me.bonus.length) {
+              <div class="bonus" data-testid="my-bonus">
+                @for (tile of me.bonus; track tile.id) {
+                  <mj-tile [code]="tile.code" />
+                }
+              </div>
+            }
+          </div>
+        }
+
+        <div class="hand" data-testid="my-hand" [class.grouped]="arranged()">
+          @for (block of handBlocks(); track block.key) {
+            <div class="group" [attr.data-group]="block.kind" [attr.aria-label]="block.ariaLabel || null">
+              <div class="group-tiles">
+                @for (tile of block.tiles; track tile.id) {
+                  <button
+                    class="tile-button"
+                    type="button"
+                    (click)="tapTile(tile)"
+                    [attr.aria-label]="tileLabel(tile)"
+                    [attr.aria-pressed]="pendingClaim() ? isPicked(tile.id) : null"
+                    [attr.data-tile]="tile.code"
+                    [attr.data-tile-id]="tile.id"
+                    [disabled]="!pendingClaim() && (!isMyTurn() || view.phase !== 'AwaitingDiscard')"
+                  >
+                    <mj-tile
+                      [code]="tile.code"
+                      [raised]="selected() === tile.id"
+                      [hint]="hintFor(tile.id)"
+                      [picked]="isPicked(tile.id)"
+                      [badgeText]="badgeFor(tile.id)"
+                      [joker]="isJoker(tile.code)"
+                    />
+                  </button>
+                }
+              </div>
+
+              @if (block.label) {
+                <span class="group-label">{{ block.label }}</span>
+              }
+            </div>
+          }
+        </div>
+      }
+    </section>
+
+    <!-- ---------------------------------------------------------------- action bar -->
+    <footer class="actions">
+      @if (view.phase === 'HandOver') {
+        <span class="prompt">Hand finished</span>
+      } @else if (view.claim; as pending) {
+        @if (!pending.youAnswered) {
+          <div class="claim" data-testid="claim-bar">
+            <div class="claim-tile">
+              <mj-tile
+                [code]="pending.tile.code"
+                [highlight]="!claimWins()"
+                [hint]="claimWins() ? 'win' : 'none'"
+                [badgeText]="claimWins() ? '!' : null"
+                [joker]="isJoker(pending.tile.code)"
+              />
+              <span class="countdown" data-testid="claim-countdown">{{ claimSeconds() }}s</span>
+            </div>
+
+            <div class="claim-buttons">
+              @for (candidate of candidates(); track $index; let i = $index) {
+                <button
+                  class="btn"
+                  [class.danger]="candidate.kind === 'Todas'"
+                  [class.recommended]="i === 0"
+                  type="button"
+                  (click)="claimWith(candidate)"
+                  [attr.data-testid]="candidateTestId(i)"
+                  [attr.data-claim-kind]="candidate.kind"
+                >
+                  {{ candidate.kind === 'Todas' ? 'Todas!' : candidate.describe }}
+                  @if (i === 0) {
+                    <em class="best">best</em>
+                  }
+                </button>
+              }
+
+              <button
+                class="btn"
+                type="button"
+                (click)="takePick()"
+                [disabled]="!pickMatch()"
+                data-testid="claim-take"
+              >
+                {{ pickMatch() ? 'Take - ' + pickMatch()!.describe : 'Take' }}
+              </button>
+
+              <button class="btn secondary" type="button" (click)="pass()" data-testid="claim-pass">Pass</button>
+            </div>
+
+            @if (pickError(); as problem) {
+              <p class="claim-invalid" data-testid="claim-invalid" role="alert">{{ problem }}</p>
+            } @else {
+              <p class="legend" data-testid="claim-legend">
+                Tap tiles in your hand to take it. Green outline with a letter = one way to use that
+                tile, dashed gold = more than one, red = this tile wins the hand.
+              </p>
+            }
+
+            <div class="timer" [style.transform]="'scaleX(' + claimFraction() + ')'"></div>
+          </div>
+        } @else {
+          <span class="prompt">Waiting for the others...</span>
+        }
+      } @else if (isMyTurn() && view.phase === 'AwaitingDiscard') {
+        <div class="turn" data-testid="turn-bar">
+          <span class="prompt">
+            @if (selected()) {
+              Tap again to throw it
+            } @else {
+              Your turn - pick a tile to throw
+            }
+          </span>
+
+          @if (view.yourTurn; as turn) {
+            <div class="turn-buttons">
+              @if (turn.canDeclareTodas) {
+                <button class="btn danger" type="button" (click)="todas()" data-testid="declare-todas">Todas!</button>
+              }
+              @for (face of turn.secretKangFaces; track face) {
+                <button class="btn secondary" type="button" (click)="secretKang(face)" data-testid="declare-secret-kang">
+                  Secret kang {{ label(face) }}
+                </button>
+              }
+              @for (face of turn.sagasaFaces; track face) {
+                <button class="btn secondary" type="button" (click)="sagasa(face)" data-testid="declare-sagasa">
+                  Sagasa {{ label(face) }}
+                </button>
+              }
+            </div>
+          }
+        </div>
+      } @else if (isMyTurn()) {
+        <span class="prompt">Drawing...</span>
+      } @else {
+        <span class="prompt" data-testid="waiting">
+          {{ view.seats[view.currentSeat].displayName }} is playing
+        </span>
+      }
+    </footer>
+
+    <!-- ---------------------------------------------------------------- overlays -->
+    @if (lastError(); as error) {
+      <p class="floating-error" data-testid="move-error">{{ error }}</p>
+    }
+
+    @if (showScores()) {
+      <div class="sheet" (click)="showScores.set(false)">
+        <div class="sheet-body panel" (click)="$event.stopPropagation()">
+          <h2>Running totals</h2>
+          <ul class="scores">
+            @for (seat of view.seats; track seat.seat) {
+              <li>
+                <span>{{ seat.displayName }}</span>
+                <strong [class.down]="seat.balance < 0">
+                  {{ seat.balance > 0 ? '+' : '' }}{{ seat.balance }}
+                </strong>
+              </li>
+            }
+          </ul>
+          <button class="btn wide secondary" type="button" (click)="showScores.set(false)">Close</button>
+        </div>
+      </div>
+    }
+
+    @if (view.outcome; as outcome) {
+      <div class="sheet" data-testid="outcome">
+        <div class="sheet-body panel">
+          <h2 data-testid="outcome-title">{{ outcomeTitle(view) }}</h2>
+
+          @if (outcome.winnerSeat !== null) {
+            <p class="total" data-testid="outcome-total">{{ outcome.totalUnits }} units</p>
+
+            <ul class="breakdown" data-testid="outcome-breakdown">
+              @for (line of outcome.breakdown; track $index) {
+                <li>
+                  <span>{{ bonusLabel(line.name) }}</span>
+                  <strong>{{ line.units }}</strong>
+                </li>
+              }
+            </ul>
+          }
+
+          @if (outcome.settlements.length) {
+            <ul class="scores" data-testid="outcome-settlements">
+              @for (settlement of outcome.settlements; track $index) {
+                <li>
+                  <span>{{ view.seats[settlement.seat].displayName }}</span>
+                  <strong [class.down]="settlement.delta < 0">
+                    {{ settlement.delta > 0 ? '+' : '' }}{{ settlement.delta }}
+                  </strong>
+                </li>
+              }
+            </ul>
+          }
+
+          <button class="btn wide" type="button" (click)="backToLobby()" data-testid="back-to-lobby">
+            Back to the table
+          </button>
+        </div>
+      </div>
+    }
+  </div>
+} @else {
+  <main class="loading">
+    <p class="muted">Connecting to the table...</p>
+    @if (lastError(); as error) {
+      <p class="error">{{ error }}</p>
+      <a class="btn secondary" [routerLink]="['/room', code()]">Back to the lobby</a>
+    }
+  </main>
+}

@@ -1,0 +1,16 @@
+Tile artwork
+============
+
+The 34 tile faces (D1-D9 dots, B1-B9 bamboo, C1-C9 characters, W1-W4 winds, R1-R3 dragons)
+and back.svg come from FluffyStuff/riichi-mahjong-tiles.
+
+  https://github.com/FluffyStuff/riichi-mahjong-tiles
+  Released into the public domain (CC0 1.0): https://creativecommons.org/publicdomain/zero/1.0/
+
+R3, the white dragon, was also redrawn. The original is a completely blank face, which is
+traditional but on screen reads as a tile that failed to load; it now uses the other common
+convention, a blue frame.
+
+The eight flower and season tiles (F1-F4, S1-S4) are not part of a riichi set, which has no
+bonus tiles beyond the honours. They were drawn for this project to match, and are covered by
+this project's licence.

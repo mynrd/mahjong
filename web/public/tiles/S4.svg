@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="400" viewBox="0 0 300 400">
+  <title>Winter</title>
+  <text x="54" y="76" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="66"
+        font-weight="700" fill="#C0392B" text-anchor="middle">4</text>
+  <g transform="translate(150 226) scale(1.42)">
+    <g transform="rotate(0)">
+      <line x1="0" y1="0" x2="0" y2="-92" stroke="#2980B9" stroke-width="10" stroke-linecap="round"/>
+      <line x1="0" y1="-56" x2="-26" y2="-80" stroke="#2980B9" stroke-width="8" stroke-linecap="round"/>
+      <line x1="0" y1="-56" x2="26" y2="-80" stroke="#2980B9" stroke-width="8" stroke-linecap="round"/>
+    </g>
+    <g transform="rotate(60)">
+      <line x1="0" y1="0" x2="0" y2="-92" stroke="#2980B9" stroke-width="10" stroke-linecap="round"/>
+      <line x1="0" y1="-56" x2="-26" y2="-80" stroke="#2980B9" stroke-width="8" stroke-linecap="round"/>
+      <line x1="0" y1="-56" x2="26" y2="-80" stroke="#2980B9" stroke-width="8" stroke-linecap="round"/>
+    </g>
+    <g transform="rotate(120)">
+      <line x1="0" y1="0" x2="0" y2="-92" stroke="#2980B9" stroke-width="10" stroke-linecap="round"/>
+      <line x1="0" y1="-56" x2="-26" y2="-80" stroke="#2980B9" stroke-width="8" stroke-linecap="round"/>
+      <line x1="0" y1="-56" x2="26" y2="-80" stroke="#2980B9" stroke-width="8" stroke-linecap="round"/>
+    </g>
+    <g transform="rotate(180)">
+      <line x1="0" y1="0" x2="0" y2="-92" stroke="#2980B9" stroke-width="10" stroke-linecap="round"/>
+      <line x1="0" y1="-56" x2="-26" y2="-80" stroke="#2980B9" stroke-width="8" stroke-linecap="round"/>
+      <line x1="0" y1="-56" x2="26" y2="-80" stroke="#2980B9" stroke-width="8" stroke-linecap="round"/>
+    </g>
+    <g transform="rotate(240)">
+      <line x1="0" y1="0" x2="0" y2="-92" stroke="#2980B9" stroke-width="10" stroke-linecap="round"/>
+      <line x1="0" y1="-56" x2="-26" y2="-80" stroke="#2980B9" stroke-width="8" stroke-linecap="round"/>
+      <line x1="0" y1="-56" x2="26" y2="-80" stroke="#2980B9" stroke-width="8" stroke-linecap="round"/>
+    </g>
+    <g transform="rotate(300)">
+      <line x1="0" y1="0" x2="0" y2="-92" stroke="#2980B9" stroke-width="10" stroke-linecap="round"/>
+      <line x1="0" y1="-56" x2="-26" y2="-80" stroke="#2980B9" stroke-width="8" stroke-linecap="round"/>
+      <line x1="0" y1="-56" x2="26" y2="-80" stroke="#2980B9" stroke-width="8" stroke-linecap="round"/>
+    </g>
+    <circle cx="0" cy="0" r="16" fill="#AED6F1" stroke="#2980B9" stroke-width="5"/>
+  </g>
+</svg>

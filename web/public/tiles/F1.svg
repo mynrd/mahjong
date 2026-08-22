@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="400" viewBox="0 0 300 400">
+  <title>Plum</title>
+  <text x="54" y="76" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="66"
+        font-weight="700" fill="#1F7A3D" text-anchor="middle">1</text>
+  <g transform="translate(150 226) scale(1.42)">
+    <ellipse cx="0" cy="-40" rx="30" ry="34" fill="#E8748C" stroke="#B23A55" stroke-width="3" transform="rotate(0.0)"/>
+    <ellipse cx="0" cy="-40" rx="30" ry="34" fill="#E8748C" stroke="#B23A55" stroke-width="3" transform="rotate(72.0)"/>
+    <ellipse cx="0" cy="-40" rx="30" ry="34" fill="#E8748C" stroke="#B23A55" stroke-width="3" transform="rotate(144.0)"/>
+    <ellipse cx="0" cy="-40" rx="30" ry="34" fill="#E8748C" stroke="#B23A55" stroke-width="3" transform="rotate(216.0)"/>
+    <ellipse cx="0" cy="-40" rx="30" ry="34" fill="#E8748C" stroke="#B23A55" stroke-width="3" transform="rotate(288.0)"/>
+    <circle cx="0" cy="0" r="20" fill="#F4C542" stroke="#B8860B" stroke-width="3"/>
+  </g>
+</svg>

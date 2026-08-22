@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Mahjong.Api/Mahjong.Api.csproj" />
+    <Project Path="src/Mahjong.Domain/Mahjong.Domain.csproj" />
+    <Project Path="src/Mahjong.Infrastructure/Mahjong.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Mahjong.Api.Tests/Mahjong.Api.Tests.csproj" />
+    <Project Path="tests/Mahjong.Domain.Tests/Mahjong.Domain.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,34 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <!-- The real appsettings files are copied in so RuleConfigurationTests binds the same JSON the
+       app boots with, instead of a hand-written copy that can silently drift from it. -->
+  <ItemGroup>
+    <Content Include="..\..\src\Mahjong.Api\appsettings.json" Link="AppSettings\appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\src\Mahjong.Api\appsettings.Development.json" Link="AppSettings\appsettings.Development.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Mahjong.Api\Mahjong.Api.csproj" />
+    <ProjectReference Include="..\..\src\Mahjong.Domain\Mahjong.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Mahjong.Infrastructure\Mahjong.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>
