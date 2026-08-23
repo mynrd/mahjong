@@ -44,50 +44,21 @@ builder.Services.AddSignalR().AddJsonProtocol(options =>
 builder.Services.AddOpenApi();
 
 const string LanCors = "lan";
-var extraOrigins = builder.Configuration.GetSection("Mahjong:AllowedOrigins").Get<string[]>() ?? [];
 
 builder.Services.AddCors(options => options.AddPolicy(LanCors, policy => policy
-    // Origins are matched by shape rather than listed one by one. The machine running this gets a
-    // different address on every network it joins, and a hardcoded list means the game silently
-    // stops working the next time the router hands out a new one. Anything on the loopback or on
-    // a private range is allowed; anything routable from the internet is not, so this does not
-    // become an open door if the port is ever forwarded.
-    .SetIsOriginAllowed(origin => IsLocalOrigin(origin) || extraOrigins.Contains(origin))
+    // Every origin is allowed. This is a game run on somebody's laptop for the four people in the
+    // room, reached from whatever address the router, the phone hotspot or the tailnet happens to
+    // hand out that day, and every attempt to match those by shape ended in a browser refusing to
+    // connect for a reason nobody wants to debug mid-game.
+    //
+    // AllowAnyOrigin cannot be used here: it sends Access-Control-Allow-Origin: *, which the
+    // browser rejects together with credentials, and SignalR's handshake carries them. Reflecting
+    // whatever Origin arrived is the same permission with a header the browser accepts.
+    .SetIsOriginAllowed(_ => true)
     .AllowAnyHeader()
     .AllowAnyMethod()
     // SignalR needs credentials allowed for the websocket handshake to carry the connection id.
     .AllowCredentials()));
-
-static bool IsLocalOrigin(string origin)
-{
-    if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri)) return false;
-    if (uri.Scheme is not ("http" or "https")) return false;
-
-    var host = uri.Host;
-
-    if (host is "localhost" or "127.0.0.1" or "[::1]" or "::1") return true;
-    if (!System.Net.IPAddress.TryParse(host.Trim('[', ']'), out var ip)) return false;
-
-    if (System.Net.IPAddress.IsLoopback(ip)) return true;
-
-    var bytes = ip.GetAddressBytes();
-
-    // The private IPv4 ranges, plus link-local: 10/8, 172.16/12, 192.168/16, 169.254/16.
-    if (bytes.Length == 4)
-    {
-        return bytes[0] switch
-        {
-            10 => true,
-            172 => bytes[1] >= 16 && bytes[1] <= 31,
-            192 => bytes[1] == 168,
-            169 => bytes[1] == 254,
-            _ => false,
-        };
-    }
-
-    // IPv6 unique-local (fc00::/7) and link-local (fe80::/10).
-    return bytes.Length == 16 && ((bytes[0] & 0xFE) == 0xFC || (bytes[0] == 0xFE && (bytes[1] & 0xC0) == 0x80));
-}
 
 var app = builder.Build();
 

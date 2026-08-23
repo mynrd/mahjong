@@ -1,6 +1,8 @@
+using System.Text.Json;
 using Mahjong.Domain;
 using Mahjong.Infrastructure;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.EntityFrameworkCore;
 
 namespace Mahjong.Api;
 
@@ -103,6 +105,100 @@ public sealed class GameHub(
     public Task<Result> DeclareSagasa(string face) => Move(new GameMove.Sagasa(face));
 
     public Task<Result> DeclareTodas() => Move(new GameMove.Todas());
+
+    // ------------------------------------------------------------------ hand arrangement
+    //
+    // How this seat has laid its own tiles out. Not a move and not rules state: nothing here
+    // reaches GameState, no other seat is told, and a wrong value changes nothing but the drawing
+    // on one screen. It lives on the server only so that a phone that sleeps mid-hand does not come
+    // back having lost the grouping the player built by hand.
+
+    /// <summary>Groups of tile ids, in the order the player put them. Empty when nothing is set.</summary>
+    public async Task<int[][]> GetArrangement()
+    {
+        if (Context.Items[RoomKey] is not string code || Context.Items[PlayerKey] is not Guid playerId)
+            return [];
+
+        var gameId = registry.Find(code)?.GameId;
+        if (gameId is null) return [];
+
+        var row = await db.HandArrangements
+            .AsNoTracking()
+            .FirstOrDefaultAsync(a => a.GameId == gameId && a.PlayerId == playerId);
+
+        if (row is null) return [];
+
+        try
+        {
+            return JsonSerializer.Deserialize<int[][]>(row.GroupsJson) ?? [];
+        }
+        catch (JsonException)
+        {
+            // Nothing else reads this column, so bad JSON in it can only mean a hand-edited row.
+            // The arrangement is cosmetic, so losing it beats failing the connection.
+            logger.LogWarning("Unreadable arrangement for player {Player} in game {Game}.", playerId, gameId);
+            return [];
+        }
+    }
+
+    public async Task<Result> SaveArrangement(int[][]? groups)
+    {
+        if (Context.Items[RoomKey] is not string code || Context.Items[PlayerKey] is not Guid playerId)
+            return Result.Fail("NotSeated");
+
+        var gameId = registry.Find(code)?.GameId;
+        if (gameId is null) return Result.Fail("NoHand");
+
+        var clean = Sanitise(groups);
+        if (clean is null) return Result.Fail("BadArrangement");
+
+        var row = await db.HandArrangements
+            .FirstOrDefaultAsync(a => a.GameId == gameId && a.PlayerId == playerId);
+
+        if (row is null)
+        {
+            row = new HandArrangement { GameId = gameId.Value, PlayerId = playerId };
+            db.HandArrangements.Add(row);
+        }
+
+        row.GroupsJson = JsonSerializer.Serialize(clean);
+        row.UpdatedAt = DateTimeOffset.UtcNow;
+
+        await db.SaveChangesAsync();
+        return Result.Ok();
+    }
+
+    /// <summary>
+    /// Caps what a client can push into a text column, and drops the shapes that are meaningless
+    /// rather than rejecting the save over them. A tile id that is not in the player's hand is left
+    /// alone: the client filters on load, and checking here would need the hand, which this method
+    /// deliberately does not touch. Null means "refuse", not "empty".
+    /// </summary>
+    private static int[][]? Sanitise(int[][]? groups)
+    {
+        if (groups is null) return [];
+        if (groups.Length > MaxGroups) return null;
+
+        var seen = new HashSet<int>();
+        var kept = new List<int[]>();
+
+        foreach (var group in groups)
+        {
+            if (group is null) return null;
+
+            // A group of one is just a loose tile, and the client dissolves those anyway.
+            var ids = group.Where(seen.Add).ToArray();
+            if (ids.Length > 1) kept.Add(ids);
+
+            if (seen.Count > MaxTiles) return null;
+        }
+
+        return kept.ToArray();
+    }
+
+    /// <summary>A hand is 17 tiles at its largest. The caps are slack on purpose, not tight.</summary>
+    private const int MaxGroups = 20;
+    private const int MaxTiles = 24;
 
     private async Task<Result> Move(GameMove move)
     {

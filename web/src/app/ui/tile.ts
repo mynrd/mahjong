@@ -130,9 +130,12 @@ const SEASONS = ['', 'spring', 'summer', 'autumn', 'winter'];
       --tile-art: 92%;
     }
 
+    /* A face-down tile is the same piece of bone as a face-up one, just turned over: same cream
+       body, same edge, same shadow, no art. The only thing added is a darker border, because 13
+       blank tiles in a row at 15px with a 1px gap otherwise read as one cream blob rather than a
+       hand of thirteen. */
     .face-down {
-      background: linear-gradient(#2f7d4f, #1f5f3a);
-      border-color: #17492c;
+      border-color: #b3a37e;
     }
 
     /* A tile lifted out of the hand, one tap before it is thrown. */

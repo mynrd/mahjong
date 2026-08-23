@@ -106,6 +106,41 @@ export class Game {
     return this.invoke('DeclareTodas');
   }
 
+  // ---------------------------------------------------------------- hand arrangement
+
+  /**
+   * How this seat has laid its own tiles out, as groups of tile ids.
+   *
+   * Cosmetic all the way down: the server stores the value and hands it back, nothing else reads
+   * it and no other seat is told. It is kept server-side rather than in the browser because a
+   * phone that sleeps mid-hand reloads the page, and losing a grouping you built by hand every
+   * time the screen locks makes the feature not worth using.
+   *
+   * Both calls swallow their errors for the same reason: a drawing preference is never worth
+   * putting an error in front of somebody who is mid-hand.
+   */
+  async getArrangement(): Promise<number[][]> {
+    const hub = this.hub;
+    if (hub?.state !== signalR.HubConnectionState.Connected) return [];
+
+    try {
+      return (await hub.invoke<number[][]>('GetArrangement')) ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  async saveArrangement(groups: readonly (readonly number[])[]): Promise<void> {
+    const hub = this.hub;
+    if (hub?.state !== signalR.HubConnectionState.Connected) return;
+
+    try {
+      await hub.invoke('SaveArrangement', groups);
+    } catch {
+      // Nothing to recover: the next change queues another save.
+    }
+  }
+
   // ---------------------------------------------------------------- internals
 
   /**

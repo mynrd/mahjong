@@ -67,6 +67,8 @@ export interface ClaimPromptView {
   tile: TileView;
   fromSeat: number;
   deadlineUtc: string;
+  /** How long the window was when it opened. The countdown bar needs this to know how full to be. */
+  windowSeconds: number;
   yourOptions: ClaimKind[];
   /** One entry per distinct legal group. Highest-ranked kind first. */
   candidates: ClaimCandidateView[];

@@ -11,16 +11,19 @@ import {
 } from './models';
 
 /**
- * Where the API lives.
+ * Where the API lives: the same origin the page came from.
  *
- * Worked out from the page's own address rather than baked into a config file. The whole point of
- * this app is that somebody opens an invite link on their phone: whatever host they reached the
- * web app on is the host the API is on too, so hardcoding "localhost" would break every device
- * except the one running the server.
+ * The dev server forwards /api and /hubs to the API on port 5080 (web/proxy.conf.json), so the
+ * browser only ever talks to one host and one port. Naming the API's own port here instead broke
+ * every way of reaching the game that is not a plain LAN address: a tunnel forwards port 4200 and
+ * nothing else, so https://<tunnel-host>:5080 resolves to nothing, and on an https page a call to
+ * http://<host>:5080 is blocked as mixed content before it is even sent.
+ *
+ * Empty string rather than window.location.origin so the paths built from it stay relative and
+ * the browser resolves them itself.
  */
 export function apiBaseUrl(): string {
-  const { protocol, hostname } = window.location;
-  return `${protocol}//${hostname}:5080`;
+  return '';
 }
 
 @Injectable({ providedIn: 'root' })

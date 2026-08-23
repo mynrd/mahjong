@@ -181,12 +181,9 @@ test.describe('claiming a discard', () => {
     test.skip((await candidates.count()) === 0, 'This window only offers a todas.');
 
     // Work out which tiles the first real candidate is built from by reading its label, which the
-    // server writes: "Pung B5", "Chow B3-B4-B5". The "best" tag on the recommended button is part
-    // of the same element, so it comes off first.
-    const describe = ((await candidates.first().textContent()) ?? '')
-      .replace(/\s+/g, ' ')
-      .replace(/\s*best$/i, '')
-      .trim();
+    // server writes: "Pung B5", "Chow B3-B4-B5". Off the attribute rather than the text, because
+    // the option draws the set as tiles and their corner ranks are text too.
+    const describe = (await candidates.first().getAttribute('data-claim-describe')) ?? '';
 
     const thrown = await page.getByTestId('claim-bar').locator('mj-tile .tile').first().getAttribute('data-code');
 

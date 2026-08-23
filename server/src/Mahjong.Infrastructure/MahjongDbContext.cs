@@ -11,6 +11,7 @@ public class MahjongDbContext(DbContextOptions<MahjongDbContext> options) : DbCo
     public DbSet<GameFrame> GameFrames => Set<GameFrame>();
     public DbSet<HandResult> HandResults => Set<HandResult>();
     public DbSet<SettlementRow> Settlements => Set<SettlementRow>();
+    public DbSet<HandArrangement> HandArrangements => Set<HandArrangement>();
     public DbSet<ReplayToken> ReplayTokens => Set<ReplayToken>();
 
     protected override void OnModelCreating(ModelBuilder model)
@@ -61,6 +62,11 @@ public class MahjongDbContext(DbContextOptions<MahjongDbContext> options) : DbCo
                 .HasForeignKey(f => f.GameId)
                 .OnDelete(DeleteBehavior.Cascade);
 
+            game.HasMany(g => g.Arrangements)
+                .WithOne(a => a.Game!)
+                .HasForeignKey(a => a.GameId)
+                .OnDelete(DeleteBehavior.Cascade);
+
             game.HasOne(g => g.Result)
                 .WithOne(r => r.Game!)
                 .HasForeignKey<HandResult>(r => r.GameId)
@@ -71,6 +77,14 @@ public class MahjongDbContext(DbContextOptions<MahjongDbContext> options) : DbCo
         {
             action.HasIndex(a => new { a.GameId, a.Seq }).IsUnique();
             action.Property(a => a.PayloadJson).HasColumnType("nvarchar(max)");
+        });
+
+        model.Entity<HandArrangement>(arrangement =>
+        {
+            // One row per player per hand. The upsert on save leans on this rather than on a
+            // read-then-write, which has a window when two tabs of the same seat are open.
+            arrangement.HasIndex(a => new { a.GameId, a.PlayerId }).IsUnique();
+            arrangement.Property(a => a.GroupsJson).HasColumnType("nvarchar(max)");
         });
 
         model.Entity<GameFrame>(frame =>

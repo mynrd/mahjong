@@ -1,4 +1,4 @@
-using Mahjong.Domain;
+﻿using Mahjong.Domain;
 
 namespace Mahjong.Api;
 
@@ -70,6 +70,12 @@ public sealed record ClaimPromptView(
     TileView Tile,
     int FromSeat,
     DateTimeOffset DeadlineUtc,
+    /// <summary>
+    /// How long the window was when it opened. The deadline alone says when time runs out but not
+    /// how much there was, and a countdown bar needs both to know how full to draw itself. Sent
+    /// rather than assumed, because the length is a house rule and a table can set it to anything.
+    /// </summary>
+    int WindowSeconds,
     IReadOnlyList<ClaimKind> YourOptions,
     IReadOnlyList<ClaimCandidateView> Candidates,
     bool YouAnswered);
@@ -199,6 +205,7 @@ public static class GameViewBuilder
             TileView.Of(pending.Tile),
             pending.FromSeat,
             pending.DeadlineUtc,
+            state.Rules.ClaimWindowSeconds,
             candidates.Select(c => c.Kind).Distinct().ToList(),
             // Described server side, so the button text and the spoken label cannot drift from
             // what the candidate actually is.

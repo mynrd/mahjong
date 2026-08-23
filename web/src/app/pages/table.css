@@ -1,6 +1,14 @@
+/* Nothing on the table is text you would want to take away with you, and everything on it is
+   something you press, drag or press twice. A stray double-tap that highlights a player's name, or
+   a drag that selects the prompt instead of picking up a tile, is only ever in the way - so the
+   whole page is unselectable. `-webkit-touch-callout` is the iOS half of it: without that, a long
+   press on a tile still raises the copy/share bubble over the hand. */
 :host {
   display: block;
   min-height: 100dvh;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 /* ------------------------------------------------------------------ layout skeleton
@@ -24,7 +32,13 @@
   /* Every tile in the app sizes off this. */
   --tile-w: 34px;
   --tile-sm: 15px;
-  --tile-discard: 26px;
+  --tile-discard: 36px;
+  /* Your own hand runs bigger than the rest of the table: it is the thing you read every turn,
+     and it is the only part with room to wrap onto another row when it needs to. */
+  --hand-tile: 44px;
+
+  /* The action bar's height. Fixed, so the bar never moves - see .actions below. */
+  --actions-h: 62px;
 }
 
 .status {
@@ -105,6 +119,34 @@
   border-color: rgba(255, 180, 60, 0.5);
 }
 
+/* A chip that reads as a switch: the name on the left, the setting in a pill on the right, so it
+   says which way it is set rather than only what it is about. */
+.chip.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 5px 4px 10px;
+}
+
+.chip.switch .state {
+  padding: 2px 7px;
+  font-size: 10px;
+  color: var(--text-dim);
+  background: rgba(0, 0, 0, 0.4);
+  border-radius: 20px;
+}
+
+.chip.switch.on {
+  color: var(--text-dark);
+  background: var(--gold);
+  border-color: var(--gold);
+}
+
+.chip.switch.on .state {
+  color: var(--gold);
+  background: rgba(0, 0, 0, 0.72);
+}
+
 /* ------------------------------------------------------------------ opponents */
 
 /* On a phone the three opponent cards get about a third of the width each, which is not enough
@@ -127,11 +169,35 @@
 }
 
 .opponent {
+  position: relative;
   padding: 7px 8px;
   background: rgba(0, 0, 0, 0.24);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   min-width: 0;
+}
+
+/* Covers the whole card so anywhere on it opens the sheet. Above the tiles, which are decoration
+   here - none of them is a target in its own right. */
+.opponent-open {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.opponent-open:focus-visible {
+  outline: 3px solid var(--gold);
+  outline-offset: -3px;
+}
+
+@media (hover: hover) {
+  .opponent-open:hover {
+    background: rgba(255, 255, 255, 0.07);
+  }
 }
 
 /* Whose turn it is has to be obvious at a glance across the room. */
@@ -267,7 +333,7 @@
 .mine {
   display: grid;
   gap: 6px;
-  padding: 8px;
+  padding: 4px 8px 8px;
   background: rgba(0, 0, 0, 0.3);
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -277,6 +343,104 @@
   border-color: var(--gold);
 }
 
+/* ------------------------------------------------------------------ the lift handle
+   A hairline across the top of your box with a chevron in the middle - the same shape as the grab
+   bar on a phone sheet, because that is exactly what it does. */
+
+.grab {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 5px 10px 3px;
+  color: var(--text-dim);
+  background: none;
+  border: none;
+  touch-action: manipulation;
+}
+
+.grab .rule {
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+
+/* Drawn rather than typed. A chevron glyph is whatever the platform font has for it, which on
+   Windows is a hairline a third the size of the one on a phone. */
+.grab .chev {
+  width: 11px;
+  height: 11px;
+  margin-bottom: -4px;
+  border-right: 2.5px solid currentColor;
+  border-bottom: 2.5px solid currentColor;
+  transform: rotate(-135deg);
+}
+
+.hand-open .grab .chev {
+  margin-top: -4px;
+  margin-bottom: 0;
+  transform: rotate(45deg);
+}
+
+.grab:focus-visible {
+  outline: 3px solid var(--gold);
+  outline-offset: -3px;
+  border-radius: 8px;
+}
+
+@media (hover: hover) {
+  .grab:hover {
+    color: var(--gold);
+  }
+
+  .grab:hover .rule {
+    background: rgba(255, 211, 92, 0.45);
+  }
+}
+
+/* ------------------------------------------------------------------ the lifted hand
+   Your box grows upward until every tile is on screen, and the discard pool gives up the room.
+
+   That works because of how the grid is sized: the pool's row is the 1fr
+   (grid-template-rows above), so it is the only track holding slack, and yours is auto. Drop the
+   pool's floor and the slack moves to your box on its own - no spanning, no overlap, no measuring
+   the action bar, whose height changes anyway when the claim bar opens.
+
+   The earlier version of this had your box span the pool's row and sit on top of it. Do not go
+   back to that: a percentage max-height on an item spanning an auto track feeds the track sizing
+   its own result, and the box came out one row tall with the rest of the hand clipped off. */
+
+.hand-open .pool {
+  min-height: 0;
+}
+
+.hand-open .discards {
+  max-height: 16vh;
+}
+
+.hand-open .mine {
+  z-index: 15;
+}
+
+.hand-open .hand {
+  max-height: none;
+  overflow-y: visible;
+  --tile-w: calc(var(--hand-tile) * 1.18);
+}
+
+/* Two chips plus a name, a wind and a balance do not fit across a phone on one line. Without a
+   floor on the name it is the part that gives, and it ends up as one letter and an ellipsis while
+   the chips sit on a line of their own anyway. */
+.mine .who {
+  flex-wrap: wrap;
+  row-gap: 5px;
+}
+
+.mine .who .name {
+  flex: 0 1 auto;
+  min-width: 6ch;
+}
+
 .my-exposed {
   display: flex;
   flex-wrap: wrap;
@@ -284,22 +448,49 @@
   --tile-w: 22px;
 }
 
+/* A 17-tile hand is about 780px wide and never fits across a phone. It wraps onto more rows and
+   scrolls down rather than sideways: a sideways scrollbar hides two thirds of your own hand behind
+   a gesture, where rows you can see the top of tell you there is more. --hand-rows is how many
+   rows fit before the scrollbar appears, and the lifted state removes the cap entirely. */
 .hand {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: 2px;
-  /* A 17-tile hand does not fit across a phone, so it scrolls sideways rather than shrinking to
-     the point of being unreadable. */
-  overflow-x: auto;
-  overflow-y: visible;
+  overflow-x: hidden;
+  overflow-y: auto;
+  --hand-rows: 2;
+  max-height: calc(var(--hand-rows) * (var(--tile-w) * 1.34 + 16px));
   padding: 12px 2px 4px;
   scrollbar-width: thin;
+  /* A flick that runs out of hand must not start scrolling the table behind it. */
+  overscroll-behavior: contain;
+  /* Scoped here rather than on .table so the claim bar, the discard pool and the opponent strips
+     keep the sizes they were tuned at. */
+  --tile-w: var(--hand-tile);
 }
 
 .group,
 .group-tiles {
   display: flex;
-  flex: 0 0 auto;
   gap: 2px;
+}
+
+/* Both levels have to wrap, and the block has to be allowed to be narrower than its tiles.
+   With Auto Arrange off the whole hand is a single block, so wrapping .hand alone gives it one
+   item to wrap and nothing happens; and while the block is `flex: 0 0 auto` it is sized to its
+   own max-content, so the tiles inside it never meet an edge to wrap at either. */
+.group {
+  flex: 0 1 auto;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.group-tiles {
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  justify-content: center;
+  min-width: 0;
 }
 
 .group {
@@ -329,10 +520,9 @@
   border: none;
   /* Tiles are the primary touch target, so they get the full width rather than being padded in. */
   min-width: var(--tile-w);
-  touch-action: manipulation;
 }
 
-.tile-button:disabled {
+.tile-button.inert {
   cursor: default;
 }
 
@@ -342,13 +532,18 @@
   border-radius: 6px;
 }
 
-/* ------------------------------------------------------------------ action bar */
+/* ------------------------------------------------------------------ action bar
+   Fixed height, not a floor. The bar is the one part of the table a thumb goes to without looking,
+   so it has to be in the same place every turn: everything that used to grow it - a claim's option
+   buttons, one button per secret-kang face, a wrapping legend - now opens a sheet or a dialog
+   instead. `overflow: hidden` is the backstop that keeps a long name from finding a way through. */
 
 .actions {
   display: grid;
   place-items: center;
-  min-height: 62px;
+  height: var(--actions-h);
   padding: 8px;
+  overflow: hidden;
   background: rgba(0, 0, 0, 0.34);
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -364,30 +559,41 @@
   color: var(--gold);
 }
 
+/* One line, never two: the bar has a fixed height now, so anything that would wrap has to shrink
+   or be ellipsed instead. */
 .turn,
 .claim {
-  position: relative;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: center;
   gap: 10px;
   width: 100%;
+  min-width: 0;
+}
+
+.turn .prompt {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .turn-buttons,
 .claim-buttons {
   display: flex;
-  flex-wrap: wrap;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
   gap: 8px;
   justify-content: center;
 }
 
 .claim-tile {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 8px;
-  --tile-w: 34px;
+  --tile-w: 30px;
 }
 
 .countdown {
@@ -398,8 +604,9 @@
 }
 
 /* The claim the server would award if everyone grabbed at once, so the suggestion matches what
-   would actually happen. A label and a position in the row, never an auto-claim. */
-.btn.recommended {
+   would actually happen. A label and a position in the list, never an auto-claim. */
+.btn.recommended,
+.option.recommended {
   box-shadow: 0 0 0 2px var(--gold);
 }
 
@@ -416,10 +623,126 @@
   border-radius: 20px;
 }
 
+/* ------------------------------------------------------------------ the claim dialog
+   Anchored to the top of the viewport, not centred, and with no backdrop. Taking a discard by hand
+   means tapping tiles in your own hand while this is open, so it has to stay clear of the bottom
+   half of the screen and it must not swallow pointer events on its way past. */
+
+.claim-dialog {
+  position: fixed;
+  top: max(8px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(430px, calc(100vw - 16px));
+  max-height: 54dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 10px 12px 16px;
+  background: #14402c;
+  border-color: var(--gold);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.55);
+  z-index: 26;
+}
+
+.claim-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  --tile-w: 38px;
+}
+
+.claim-what {
+  display: grid;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.claim-what strong {
+  overflow: hidden;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claim-close {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  font-size: 21px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--line);
+  border-radius: 50%;
+}
+
+/* One option per row: the kind on the left, the set it would build on the right. Full width rather
+   than a wrapping row of buttons, because the tiles are the point and they need the space. */
+.options {
+  display: grid;
+  gap: 7px;
+  margin: 10px 0;
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 9px;
+  color: var(--text);
+  text-align: left;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.option-kind {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.option .combo {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 3px;
+  --tile-w: 32px;
+}
+
+.option.danger {
+  color: #ffe3df;
+  background: rgba(180, 55, 43, 0.85);
+  border-color: var(--danger);
+}
+
+.claim-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.claim-foot .btn {
+  flex: 1 1 40%;
+}
+
+.none {
+  margin: 10px 0;
+  font-size: 13px;
+  text-align: center;
+}
+
 .legend,
 .claim-invalid {
-  flex: 1 1 100%;
-  margin: 0;
+  margin: 10px 0 0;
   font-size: 11.5px;
   line-height: 1.4;
   text-align: center;
@@ -438,13 +761,14 @@
   border-radius: var(--radius-sm);
 }
 
-/* Runs down as the claim window closes, so the pressure is visible without reading the number. */
+/* Runs down as the claim window closes, so the pressure is visible without reading the number.
+   Sticky rather than absolute: the dialog scrolls when the options do not fit, and a bar that
+   scrolls off the bottom is a bar nobody sees in the second half of the window. */
 .timer {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -8px;
+  position: sticky;
+  bottom: 0;
   height: 3px;
+  margin-top: 12px;
   background: var(--gold);
   border-radius: 2px;
   transform-origin: left;
@@ -512,6 +836,61 @@
   text-align: center;
 }
 
+/* ------------------------------------------------------------------ one player, enlarged */
+
+.sheet-body h2 .wind {
+  margin-right: 8px;
+  padding: 3px 8px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  vertical-align: middle;
+  background: rgba(0, 0, 0, 0.4);
+  border-radius: 5px;
+}
+
+.sheet-body h3 {
+  margin: 14px 0 7px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.seat-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+  padding: 8px 11px;
+  font-size: 14px;
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: var(--radius-sm);
+}
+
+/* Hand size, not the tiles themselves: reading a claimed kang off a 19px tile is the problem this
+   sheet exists to solve. */
+.big-melds,
+.big-bonus {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  --tile-w: 54px;
+}
+
+.big-melds .meld {
+  gap: 2px;
+  padding: 4px;
+}
+
+.sheet-body .big-melds + .btn,
+.sheet-body .big-bonus + .btn,
+.sheet-body .none + .btn {
+  margin-top: 16px;
+}
+
 .total {
   margin: 0 0 14px;
   font-size: 30px;
@@ -574,7 +953,17 @@
 
     --tile-w: 52px;
     --tile-sm: 19px;
-    --tile-discard: 34px;
+    --tile-discard: 46px;
+    --hand-tile: 52px;
+    --actions-h: 70px;
+  }
+
+  .claim-head {
+    --tile-w: 46px;
+  }
+
+  .option .combo {
+    --tile-w: 38px;
   }
 
   .opponents {
@@ -610,9 +999,6 @@
   }
 
   .hand {
-    /* "safe" matters once Auto Arrange adds gaps: a plain centre on an overflowing flex row puts
-       the first tiles off the left edge where no amount of scrolling reaches them. */
-    justify-content: safe center;
     padding-top: 16px;
   }
 
@@ -633,7 +1019,8 @@
     margin: 0 auto;
     --tile-w: 62px;
     --tile-sm: 22px;
-    --tile-discard: 40px;
+    --tile-discard: 56px;
+    --hand-tile: 60px;
   }
 
   .pool {
@@ -645,6 +1032,28 @@
 @media (max-height: 520px) {
   .table {
     --tile-w: 40px;
+    --hand-tile: 38px;
+    --actions-h: 54px;
+  }
+
+  /* Landscape leaves almost nothing above the hand, so the dialog takes what there is and scrolls
+     rather than reaching down over the tiles it is asking about. */
+  .claim-dialog {
+    max-height: 78dvh;
+    --tile-w: 26px;
+  }
+
+  .claim-head {
+    --tile-w: 30px;
+  }
+
+  .option .combo {
+    --tile-w: 26px;
+  }
+
+  /* One row on a short screen: two would leave the action bar off the bottom. */
+  .hand {
+    --hand-rows: 1;
   }
 
   .pool {
@@ -654,4 +1063,393 @@
   .discards {
     max-height: 22vh;
   }
+}
+
+/* ================================================================== motion
+   Everything here is entry animation or state feedback. Nothing in it carries information that is
+   not also carried by a colour, an outline or a word, so the reduced-motion block at the bottom
+   turns the lot off without taking anything away. */
+
+/* ------------------------------------------------------------------ a discard lands
+   Which edge a tile comes in from is the seat that threw it, counted round from you - the same
+   offset that decides which opponent card is drawn on which side.
+
+   The travel is deliberately short. .discards is a scroll container, and a scroll container clips
+   on both axes, so a tile starting half a screen away would be cut off rather than seen flying.
+   A short offset with a scale settling to 1 reads as "thrown in and landed" inside the box. */
+
+.discards mj-tile.landing {
+  position: relative;
+  z-index: 1;
+  animation: land 340ms cubic-bezier(0.2, 0.9, 0.25, 1);
+}
+
+/* 0 is you, then round the table: right, across, left. */
+.discards mj-tile.landing[data-from='0'] {
+  --fly-x: 0;
+  --fly-y: 30px;
+  --fly-r: -7deg;
+}
+.discards mj-tile.landing[data-from='1'] {
+  --fly-x: 34px;
+  --fly-y: 0;
+  --fly-r: 8deg;
+}
+.discards mj-tile.landing[data-from='2'] {
+  --fly-x: 0;
+  --fly-y: -30px;
+  --fly-r: 7deg;
+}
+.discards mj-tile.landing[data-from='3'] {
+  --fly-x: -34px;
+  --fly-y: 0;
+  --fly-r: -8deg;
+}
+
+@keyframes land {
+  from {
+    transform: translate(var(--fly-x, 0), var(--fly-y, 0)) scale(1.55) rotate(var(--fly-r, 0deg));
+    opacity: 0;
+  }
+  55% {
+    opacity: 1;
+  }
+}
+
+/* ------------------------------------------------------------------ your own throw
+   Covers the gap between the tap and the snapshot that removes the tile. Usually cut short by that
+   snapshot arriving, which is fine - it is not meant to finish. */
+
+.tile-button.throwing {
+  pointer-events: none;
+  animation: throw-up 200ms ease-in forwards;
+}
+
+@keyframes throw-up {
+  to {
+    transform: translateY(-38px) scale(0.86);
+    opacity: 0;
+  }
+}
+
+/* ------------------------------------------------------------------ a tile arrives
+   A draw, or the tiles a claim just won. The hand is kept sorted, so the new tile does not land at
+   the end where you are looking - the glow is what says where it went. */
+
+.tile-button.arriving {
+  animation: arrive 420ms cubic-bezier(0.2, 0.9, 0.25, 1);
+}
+
+.tile-button.arriving mj-tile {
+  animation: arrive-glow 420ms ease-out;
+}
+
+@keyframes arrive {
+  from {
+    transform: translateY(-26px) scale(1.08);
+    opacity: 0;
+  }
+  55% {
+    opacity: 1;
+  }
+}
+
+@keyframes arrive-glow {
+  from,
+  40% {
+    filter: drop-shadow(0 0 7px var(--gold));
+  }
+}
+
+/* ------------------------------------------------------------------ things appearing
+   No TypeScript behind any of these. @for tracks by tile id or by index, so an existing node is
+   reused and only a genuinely new one is created - and a CSS animation runs on creation. That does
+   mean the whole table animates once on first paint, which reads as it dealing itself in. */
+
+.hidden-hand mj-tile {
+  animation: pop-in 160ms ease-out;
+}
+
+.melds .meld,
+.my-exposed .meld {
+  animation: meld-in 260ms cubic-bezier(0.2, 0.9, 0.25, 1);
+}
+
+.bonus mj-tile {
+  animation: pop-in 220ms cubic-bezier(0.2, 0.9, 0.25, 1);
+}
+
+.toasts p {
+  animation: toast-in 180ms ease-out;
+}
+
+.sheet {
+  animation: fade-in 150ms ease-out;
+}
+
+.sheet-body {
+  animation: sheet-in 220ms cubic-bezier(0.2, 0.9, 0.25, 1);
+}
+
+/* Drops in from above rather than scaling: it is anchored to the top edge, and a scale from the
+   centre of a top-anchored panel reads as a jump. */
+.claim-dialog {
+  animation: drop-in 200ms cubic-bezier(0.2, 0.9, 0.25, 1);
+}
+
+@keyframes drop-in {
+  from {
+    transform: translate(-50%, -14px);
+    opacity: 0;
+  }
+}
+
+@keyframes pop-in {
+  from {
+    transform: scale(0.8);
+    opacity: 0;
+  }
+}
+
+@keyframes meld-in {
+  from {
+    transform: scale(0.86);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.04);
+    box-shadow: 0 0 0 2px var(--gold);
+  }
+}
+
+@keyframes toast-in {
+  from {
+    transform: translateY(-12px);
+    opacity: 0;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes sheet-in {
+  from {
+    transform: scale(0.94);
+    opacity: 0;
+  }
+}
+
+/* ------------------------------------------------------------------ state feedback */
+
+/* Whose turn it is, readable from across the room without staring at a border. */
+.opponent.active {
+  animation: breathe 2.4s ease-in-out infinite;
+}
+
+@keyframes breathe {
+  50% {
+    box-shadow:
+      0 0 0 1px var(--gold) inset,
+      0 0 16px rgba(255, 211, 92, 0.42);
+  }
+}
+
+/* The same beat on your own box. Border colour rather than box-shadow, because the lifted state
+   already owns the shadow. */
+.my-turn .mine {
+  animation: breathe-edge 2.4s ease-in-out infinite;
+}
+
+@keyframes breathe-edge {
+  50% {
+    border-color: #fff1c4;
+  }
+}
+
+/* Tapping has to feel connected on a phone, and hovering has to lift on a desktop - but only where
+   there is a real pointer, or the lift sticks after every tap. */
+.tile-button:not(.inert) {
+  transition: transform 90ms ease;
+}
+
+.tile-button:not(.inert):active {
+  transform: scale(0.96);
+}
+
+@media (hover: hover) {
+  .tile-button:not(.inert):hover {
+    transform: translateY(-4px);
+  }
+}
+
+/* The last two seconds of a claim window. The number is already counting down; this is so you do
+   not have to be reading it. */
+.claim.urgent .countdown,
+.claim-dialog.urgent .countdown {
+  color: var(--danger);
+  animation: urgent 500ms ease-in-out infinite alternate;
+}
+
+.claim-dialog.urgent .timer {
+  background: var(--danger);
+}
+
+@keyframes urgent {
+  to {
+    transform: scale(1.14);
+  }
+}
+
+/* ------------------------------------------------------------------ reduced motion
+   Every animation above is decoration. The landed discard still has its gold outline, the active
+   seat still has its gold border, the countdown still counts. Turning the motion off loses none of
+   it, so it all goes. */
+
+@media (prefers-reduced-motion: reduce) {
+  .discards mj-tile.landing,
+  .tile-button.throwing,
+  .tile-button.arriving,
+  .tile-button.arriving mj-tile,
+  .hidden-hand mj-tile,
+  .melds .meld,
+  .my-exposed .meld,
+  .bonus mj-tile,
+  .toasts p,
+  .sheet,
+  .sheet-body,
+  .opponent.active,
+  .my-turn .mine,
+  .claim.urgent .countdown,
+  .claim-dialog.urgent .countdown,
+  .claim-dialog {
+    animation: none;
+  }
+
+  .tile-button:not(.inert) {
+    transition: none;
+  }
+
+  .tile-button:not(.inert):hover,
+  .tile-button:not(.inert):active {
+    transform: none;
+  }
+
+  /* The throw still has to get the tile out of the way, it just does it instantly. */
+  .tile-button.throwing {
+    opacity: 0;
+  }
+}
+
+/* ================================================================== arranging by hand
+   Manual grouping. Only live while the hand is lifted: down there the hand is a vertical scroll
+   container and a drag would be fighting the scroll for the same gesture, and the tiles are small
+   enough that dropping one on the wrong neighbour would be routine. */
+
+/* A group the player built. No label - unlike an Auto Arrange block there is nothing true to write
+   on it - so the gap and the tray behind it are what say these tiles belong together. */
+.group[data-group='manual'] .group-tiles {
+  padding: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 7px;
+  box-shadow: 0 0 0 1px var(--line) inset;
+}
+
+.hand:has(.group[data-group='manual']) {
+  gap: calc(var(--tile-w) * 0.3);
+}
+
+/* A tile you cannot throw right now still reads as a tile. It is not `disabled` any more - that
+   attribute swallows the pointer events a drag needs - so the dimming has to be drawn here rather
+   than left to the browser. */
+.tile-button.inert mj-tile {
+  opacity: 0.82;
+}
+
+/* Dragging works whether the hand is up or down now, so a tile has to keep the touch gesture in
+   both states - `manipulation` hands a moving touch to the scroller and the drag dies as a
+   pointercancel. Down, the hand is still a vertical scroll container, so a tile gives vertical
+   drags back to it and keeps the horizontal ones: a hand wraps into rows, so a regroup is a
+   sideways move anyway. Lifted, nothing under the tile scrolls and it takes the lot. */
+.tile-button {
+  touch-action: pan-y;
+}
+
+.hand-open .tile-button {
+  touch-action: none;
+}
+
+/* The tile being dragged stays in the layout so the hand does not reflow under the pointer - only
+   the ghost moves. */
+.tile-button.lifted-out mj-tile {
+  opacity: 0.3;
+}
+
+/* Where it would land. Drawn on the target, because "the group grows" is the thing that is about
+   to happen and the ghost cannot say it. */
+.tile-button.drop-target mj-tile {
+  outline: 3px solid var(--gold);
+  outline-offset: 2px;
+  transform: translateY(-5px);
+}
+
+.ghost {
+  position: fixed;
+  z-index: 40;
+  /* Centred under the pointer, and never the answer to a hit test - the tile being dropped on has
+     to be the one the pointer is actually over. */
+  transform: translate(-50%, -55%) rotate(-4deg) scale(1.12);
+  pointer-events: none;
+  filter: drop-shadow(0 10px 14px rgba(0, 0, 0, 0.5));
+  --tile-w: var(--hand-tile);
+}
+
+.arrange-hint {
+  margin: 0;
+  padding: 6px 10px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  text-align: center;
+  color: var(--text-dark);
+  background: var(--gold);
+  border-radius: var(--radius-sm);
+}
+
+/* ------------------------------------------------------------------ dropping a tile in
+   Drag a tile out of your hand and into the middle to throw it. Two states, because a drop zone
+   that only appears under the pointer is a zone nobody finds: dashed while a drag is live and the
+   throw would be legal, filled once the pointer is actually inside it.
+
+   Neither class is set unless the throw is legal, so the pool never invites a drop it would have
+   to swallow. */
+
+.pool.drop-live {
+  border-style: dashed;
+  border-color: var(--gold);
+  background: rgba(255, 211, 92, 0.08);
+}
+
+.pool.drop-live::after {
+  content: 'Drop to throw';
+  position: absolute;
+  bottom: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dark);
+  background: var(--gold);
+  border-radius: 20px;
+  pointer-events: none;
+}
+
+.pool.drop-hot {
+  border-style: solid;
+  background: rgba(255, 211, 92, 0.2);
+  box-shadow: 0 0 0 2px var(--gold) inset;
 }

@@ -1,5 +1,5 @@
 @if (view(); as view) {
-  <div class="table" [class.my-turn]="isMyTurn()" data-testid="table">
+  <div class="table" [class.my-turn]="isMyTurn()" [class.hand-open]="handOpen()" data-testid="table">
     <!-- ---------------------------------------------------------------- status bar -->
     <header class="status">
       <div class="left">
@@ -40,6 +40,19 @@
             [attr.data-seat]="opponent.seat"
             [attr.data-testid]="'opponent-' + opponent.seat"
           >
+            <!-- The whole card opens the player's sheet. A transparent button laid over it rather
+                 than a click handler on the card, so it is reachable by keyboard and announced as
+                 a button without the card having to become one - a button may not hold the divs
+                 the card is built from. -->
+            <button
+              class="opponent-open"
+              type="button"
+              (click)="zoomSeat.set(opponent.seat)"
+              [attr.data-testid]="'opponent-' + opponent.seat + '-open'"
+            >
+              <span class="sr-only">Show what {{ opponent.displayName }} has on the table</span>
+            </button>
+
             <div class="who">
               <span class="wind">{{ windOf(opponent.seat) }}</span>
               <span class="name">{{ opponent.displayName }}</span>
@@ -87,7 +100,12 @@
     </section>
 
     <!-- ---------------------------------------------------------------- discard pool -->
-    <section class="pool" data-testid="discard-pool">
+    <section
+      class="pool"
+      [class.drop-live]="dragged() !== null && canThrowNow()"
+      [class.drop-hot]="overPool() && canThrowNow()"
+      data-testid="discard-pool"
+    >
       @if (view.discards.length === 0) {
         <p class="muted empty">No tiles thrown yet.</p>
       } @else {
@@ -98,6 +116,8 @@
               [dimmed]="discard.claimed"
               [highlight]="discard.tile.id === liveDiscard()?.tile?.id"
               [joker]="isJoker(discard.tile.code)"
+              [class.landing]="discard.tile.id === landing()?.id"
+              [attr.data-from]="discard.tile.id === landing()?.id ? landing()!.from : null"
             />
           }
         </div>
@@ -114,6 +134,24 @@
 
     <!-- ---------------------------------------------------------------- your area -->
     <section class="mine">
+      <!-- Lifts the box up over the discard pool so the whole hand is on screen at once, which is
+           the only way a 17-tile hand fits on a phone without shrinking the tiles past reading. -->
+      <button
+        class="grab"
+        type="button"
+        (click)="toggleHandOpen()"
+        [attr.aria-expanded]="handOpen()"
+        aria-controls="my-hand"
+        data-testid="toggle-hand"
+      >
+        <span class="rule"></span>
+        <span class="chev" aria-hidden="true"></span>
+        <span class="rule"></span>
+        <span class="sr-only">
+          {{ handOpen() ? 'Drop your hand back down' : 'Lift your hand to see every tile' }}
+        </span>
+      </button>
+
       @if (me(); as me) {
         <div class="who">
           <span class="wind">{{ windOf(me.seat) }}</span>
@@ -125,16 +163,31 @@
           <span class="balance" [class.down]="me.balance < 0" data-testid="my-balance">
             {{ me.balance > 0 ? '+' : '' }}{{ me.balance }}
           </span>
+          <!-- On/off in the chip itself. "Auto Arrange" on its own says what the button is about
+               but not which way it is set, and the difference between a laid-out hand and a hand
+               you laid out yourself is not always obvious from the tiles. -->
           <button
-            class="chip"
+            class="chip switch"
             type="button"
+            [class.on]="arranged()"
             (click)="toggleArrange()"
             [attr.aria-pressed]="arranged()"
+            [attr.aria-label]="'Auto arrange ' + (arranged() ? 'on' : 'off')"
             data-testid="auto-arrange"
           >
-            Auto Arrange
+            <span aria-hidden="true">AA</span>
+            <span class="state" aria-hidden="true">{{ arranged() ? 'ON' : 'OFF' }}</span>
           </button>
         </div>
+
+        <!-- Shown only once a tile is actually picked up. Grouping is always available with Auto
+             Arrange off, so a permanent banner saying so would sit there all game and push the
+             tiles down; this appears at the one moment the next tap is not obvious. -->
+        @if (held() !== null) {
+          <p class="arrange-hint" data-testid="arrange-hint">
+            Tap another tile to group them, or tap this one again to take it out of its group.
+          </p>
+        }
 
         @if (me.melds.length || me.bonus.length) {
           <div class="my-exposed">
@@ -155,7 +208,7 @@
           </div>
         }
 
-        <div class="hand" data-testid="my-hand" [class.grouped]="arranged()">
+        <div class="hand" id="my-hand" data-testid="my-hand" [class.grouped]="arranged()">
           @for (block of handBlocks(); track block.key) {
             <div class="group" [attr.data-group]="block.kind" [attr.aria-label]="block.ariaLabel || null">
               <div class="group-tiles">
@@ -163,18 +216,27 @@
                   <button
                     class="tile-button"
                     type="button"
+                    [class.throwing]="throwing() === tile.id"
+                    [class.arriving]="arriving().has(tile.id)"
+                    [class.inert]="tileInert()"
+                    [class.lifted-out]="dragged() === tile.id"
+                    [class.drop-target]="dropTarget() === tile.id"
                     (click)="tapTile(tile)"
+                    (pointerdown)="onTilePointerDown($event, tile)"
+                    (pointermove)="onTilePointerMove($event)"
+                    (pointerup)="onTilePointerUp($event)"
+                    (pointercancel)="onTilePointerCancel()"
                     [attr.aria-label]="tileLabel(tile)"
                     [attr.aria-pressed]="pendingClaim() ? isPicked(tile.id) : null"
+                    [attr.aria-disabled]="tileInert() ? 'true' : null"
                     [attr.data-tile]="tile.code"
                     [attr.data-tile-id]="tile.id"
-                    [disabled]="!pendingClaim() && (!isMyTurn() || view.phase !== 'AwaitingDiscard')"
                   >
                     <mj-tile
                       [code]="tile.code"
                       [raised]="selected() === tile.id"
                       [hint]="hintFor(tile.id)"
-                      [picked]="isPicked(tile.id)"
+                      [picked]="isPicked(tile.id) || held() === tile.id"
                       [badgeText]="badgeFor(tile.id)"
                       [joker]="isJoker(tile.code)"
                     />
@@ -191,13 +253,16 @@
       }
     </section>
 
-    <!-- ---------------------------------------------------------------- action bar -->
+    <!-- ---------------------------------------------------------------- action bar
+         One row, one fixed height, whatever is going on. Everything that used to make it grow -
+         the claim options, one button per secret-kang face - now opens a sheet instead, so the bar
+         never moves under a thumb that is already on its way to it. -->
     <footer class="actions">
       @if (view.phase === 'HandOver') {
         <span class="prompt">Hand finished</span>
       } @else if (view.claim; as pending) {
         @if (!pending.youAnswered) {
-          <div class="claim" data-testid="claim-bar">
+          <div class="claim" [class.urgent]="claimSeconds() <= 2" data-testid="claim-strip">
             <div class="claim-tile">
               <mj-tile
                 [code]="pending.tile.code"
@@ -206,50 +271,25 @@
                 [badgeText]="claimWins() ? '!' : null"
                 [joker]="isJoker(pending.tile.code)"
               />
-              <span class="countdown" data-testid="claim-countdown">{{ claimSeconds() }}s</span>
+              <span class="countdown" data-testid="claim-strip-countdown">{{ claimSeconds() }}s</span>
             </div>
 
             <div class="claim-buttons">
-              @for (candidate of candidates(); track $index; let i = $index) {
-                <button
-                  class="btn"
-                  [class.danger]="candidate.kind === 'Todas'"
-                  [class.recommended]="i === 0"
-                  type="button"
-                  (click)="claimWith(candidate)"
-                  [attr.data-testid]="candidateTestId(i)"
-                  [attr.data-claim-kind]="candidate.kind"
-                >
-                  {{ candidate.kind === 'Todas' ? 'Todas!' : candidate.describe }}
-                  @if (i === 0) {
-                    <em class="best">best</em>
-                  }
+              @if (!claimDialogOpen()) {
+                <button class="btn" type="button" (click)="openClaimDialog()" data-testid="claim-open">
+                  {{ candidates().length ? 'Options (' + candidates().length + ')' : 'Options' }}
                 </button>
               }
 
               <button
-                class="btn"
+                class="btn secondary"
                 type="button"
-                (click)="takePick()"
-                [disabled]="!pickMatch()"
-                data-testid="claim-take"
+                (click)="pass()"
+                [attr.data-testid]="claimDialogOpen() ? 'claim-pass-quick' : 'claim-pass'"
               >
-                {{ pickMatch() ? 'Take - ' + pickMatch()!.describe : 'Take' }}
+                Pass
               </button>
-
-              <button class="btn secondary" type="button" (click)="pass()" data-testid="claim-pass">Pass</button>
             </div>
-
-            @if (pickError(); as problem) {
-              <p class="claim-invalid" data-testid="claim-invalid" role="alert">{{ problem }}</p>
-            } @else {
-              <p class="legend" data-testid="claim-legend">
-                Tap tiles in your hand to take it. Green outline with a letter = one way to use that
-                tile, dashed gold = more than one, red = this tile wins the hand.
-              </p>
-            }
-
-            <div class="timer" [style.transform]="'scaleX(' + claimFraction() + ')'"></div>
           </div>
         } @else {
           <span class="prompt">Waiting for the others...</span>
@@ -269,14 +309,9 @@
               @if (turn.canDeclareTodas) {
                 <button class="btn danger" type="button" (click)="todas()" data-testid="declare-todas">Todas!</button>
               }
-              @for (face of turn.secretKangFaces; track face) {
-                <button class="btn secondary" type="button" (click)="secretKang(face)" data-testid="declare-secret-kang">
-                  Secret kang {{ label(face) }}
-                </button>
-              }
-              @for (face of turn.sagasaFaces; track face) {
-                <button class="btn secondary" type="button" (click)="sagasa(face)" data-testid="declare-sagasa">
-                  Sagasa {{ label(face) }}
+              @if (extraMoves().length) {
+                <button class="btn secondary" type="button" (click)="showMoves.set(true)" data-testid="open-moves">
+                  Moves ({{ extraMoves().length }})
                 </button>
               }
             </div>
@@ -292,8 +327,200 @@
     </footer>
 
     <!-- ---------------------------------------------------------------- overlays -->
+
+    <!-- The tile under the finger during a drag. Fixed to the viewport so no scroll container it
+         passes over can clip it, and transparent to hit testing so the tile it is dropped on is
+         the one the pointer is actually over. -->
+    @if (draggedTile(); as tile) {
+      @if (ghost(); as at) {
+        <div class="ghost" [style.left.px]="at.x" [style.top.px]="at.y" aria-hidden="true">
+          <mj-tile [code]="tile.code" [joker]="isJoker(tile.code)" />
+        </div>
+      }
+    }
+    <!-- The claim dialog. Anchored to the top of the screen rather than centred, because taking a
+         discard by hand means tapping tiles in your own hand while it is open - a sheet over the
+         middle of the table would cover the very thing it is asking about. No backdrop for the
+         same reason. -->
+    @if (view.claim; as pending) {
+      @if (!pending.youAnswered && claimDialogOpen()) {
+        <div
+          class="claim-dialog panel"
+          [class.urgent]="claimSeconds() <= 2"
+          role="dialog"
+          aria-label="Take the discard"
+          data-testid="claim-bar"
+        >
+          <header class="claim-head">
+            <mj-tile
+              [code]="pending.tile.code"
+              [highlight]="!claimWins()"
+              [hint]="claimWins() ? 'win' : 'none'"
+              [badgeText]="claimWins() ? '!' : null"
+              [joker]="isJoker(pending.tile.code)"
+            />
+
+            <div class="claim-what">
+              <strong>{{ view.seats[pending.fromSeat].displayName }} threw {{ label(pending.tile.code) }}</strong>
+              <span class="countdown" data-testid="claim-countdown">{{ claimSeconds() }}s</span>
+            </div>
+
+            <button
+              class="claim-close"
+              type="button"
+              (click)="dismissClaimDialog()"
+              aria-label="Close and answer from the bar"
+              data-testid="claim-close"
+            >
+              <span aria-hidden="true">&times;</span>
+            </button>
+          </header>
+
+          @if (candidates().length) {
+            <!-- One row per option, drawn as the set it would make. "Chow B3-B4-B5" only means
+                 something to somebody who already reads the notation; three tiles in a row mean
+                 the same thing to everybody. -->
+            <div class="options">
+              @for (candidate of candidates(); track $index; let i = $index) {
+                <button
+                  class="option"
+                  [class.danger]="candidate.kind === 'Todas'"
+                  [class.recommended]="i === 0"
+                  type="button"
+                  (click)="claimWith(candidate)"
+                  [attr.data-testid]="candidateTestId(i)"
+                  [attr.data-claim-kind]="candidate.kind"
+                  [attr.data-claim-describe]="candidate.describe"
+                  [attr.aria-label]="candidate.describe"
+                >
+                  <span class="option-kind">
+                    {{ candidateKind(candidate) }}
+                    @if (i === 0) {
+                      <em class="best">best</em>
+                    }
+                  </span>
+
+                  <span class="combo" aria-hidden="true">
+                    @for (part of combinationOf(candidate); track $index) {
+                      <mj-tile
+                        [code]="part.code"
+                        [highlight]="part.thrown"
+                        [joker]="isJoker(part.code)"
+                      />
+                    }
+                  </span>
+                </button>
+              }
+            </div>
+          } @else {
+            <p class="muted none">Nothing in your hand takes this tile.</p>
+          }
+
+          <div class="claim-foot">
+            <button class="btn" type="button" (click)="takePick()" [disabled]="!pickMatch()" data-testid="claim-take">
+              {{ pickMatch() ? 'Take - ' + pickMatch()!.describe : 'Take' }}
+            </button>
+            <button class="btn secondary" type="button" (click)="pass()" data-testid="claim-pass">Pass</button>
+          </div>
+
+          @if (pickError(); as problem) {
+            <p class="claim-invalid" data-testid="claim-invalid" role="alert">{{ problem }}</p>
+          } @else {
+            <p class="legend" data-testid="claim-legend">
+              Or tap tiles in your hand and press Take. Green outline with a letter = one way to use
+              that tile, dashed gold = more than one, red = this tile wins the hand.
+            </p>
+          }
+
+          <div class="timer" [style.transform]="'scaleX(' + claimFraction() + ')'"></div>
+        </div>
+      }
+    }
+
+    <!-- Secret kang and sagasa. Same reasoning as the claim dialog: the action bar can say how many
+         there are without changing height, and the sheet draws the four tiles each one puts down. -->
+    @if (showMoves() && extraMoves().length) {
+      <div class="sheet" (click)="showMoves.set(false)">
+        <div class="sheet-body panel" (click)="$event.stopPropagation()" data-testid="moves-sheet">
+          <h2>Declare</h2>
+
+          <div class="options">
+            @for (move of extraMoves(); track move.kind + move.face) {
+              <button
+                class="option"
+                type="button"
+                (click)="runMove(move)"
+                [attr.data-testid]="move.testId"
+                [attr.aria-label]="move.label"
+              >
+                <span class="option-kind">{{ move.kind === 'SecretKang' ? 'Secret kang' : 'Sagasa' }}</span>
+                <span class="combo" aria-hidden="true">
+                  @for (face of move.tiles; track $index) {
+                    <mj-tile [code]="face" [joker]="isJoker(face)" />
+                  }
+                </span>
+              </button>
+            }
+          </div>
+
+          <button class="btn wide secondary" type="button" (click)="showMoves.set(false)">Close</button>
+        </div>
+      </div>
+    }
+
     @if (lastError(); as error) {
       <p class="floating-error" data-testid="move-error">{{ error }}</p>
+    }
+
+    <!-- One player, big enough to read from across the room. Only the tiles that are actually
+         turned over: their concealed hand is a count, not thirteen blank backs, because blowing up
+         a face-down tile shows you nothing you did not already know. -->
+    @if (zoomedSeat(); as seat) {
+      <div class="sheet" (click)="zoomSeat.set(null)">
+        <div class="sheet-body panel" (click)="$event.stopPropagation()" data-testid="seat-sheet">
+          <h2>
+            <span class="wind">{{ windOf(seat.seat) }}</span>
+            {{ seat.displayName }}
+          </h2>
+
+          <p class="seat-line">
+            <span data-testid="seat-sheet-count">{{ seat.concealedCount }} tiles in hand</span>
+            <span class="balance" [class.down]="seat.balance < 0">
+              {{ seat.balance > 0 ? '+' : '' }}{{ seat.balance }}
+            </span>
+          </p>
+
+          @if (seat.melds.length) {
+            <h3>Sets down</h3>
+            <div class="big-melds" data-testid="seat-sheet-melds">
+              @for (meld of seat.melds; track $index) {
+                <div class="meld">
+                  @for (face of meldFaces(meld, seat.seat === view.yourSeat); track $index) {
+                    <mj-tile [code]="face" [joker]="isJoker(face)" />
+                  }
+                </div>
+              }
+            </div>
+          }
+
+          @if (seat.bonus.length) {
+            <h3>Flowers and seasons</h3>
+            <div class="big-bonus" data-testid="seat-sheet-bonus">
+              @for (tile of seat.bonus; track tile.id) {
+                <mj-tile [code]="tile.code" />
+              }
+            </div>
+          }
+
+          @if (!seat.melds.length && !seat.bonus.length) {
+            <p class="muted none">Nothing on the table yet - every tile is still in hand.</p>
+          }
+
+          <button class="btn wide secondary" type="button" (click)="zoomSeat.set(null)" data-testid="seat-sheet-close">
+            Close
+          </button>
+        </div>
+      </div>
     }
 
     @if (showScores()) {

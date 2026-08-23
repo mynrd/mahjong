@@ -1,9 +1,11 @@
-<#
+﻿<#
 .SYNOPSIS
     Starts the Mahjong server and web app, and prints the link to share with the other players.
 
 .DESCRIPTION
     Both halves listen on every interface so phones and tablets on the same wifi can reach them.
+    With no wifi address to hand out it falls back to the Tailscale one, so a game still works when
+    the four of you are in four different houses.
 
     Before starting anything it checks the things that otherwise fail confusingly: SQL Server not
     running, a port still held by a previous run, or the web app's dependencies never installed.
@@ -48,11 +50,27 @@ $root = $PSScriptRoot
 
 # ---------------------------------------------------------------- helpers
 
+function Get-TailnetAddress {
+    # Tailscale hands out addresses from 100.64.0.0/10, the shared range in RFC 6598. Matched on
+    # the range rather than on the adapter name, so it still works if the interface has been
+    # renamed, and so it never picks up some other VPN that happens to have Tailscale in its name.
+    $ip = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object { $_.IPAddress -match '^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.' } |
+        Select-Object -First 1
+
+    if ($ip) { return $ip.IPAddress }
+    return $null
+}
+
 function Get-LanAddress {
     # Prefer the interface carrying the default route: that is the one other devices can reach.
     # Virtual and VPN adapters are filtered out by name, because several of them also hold a
-    # default route and handing out a Tailscale or VMware address produces a link that looks fine
-    # and silently never connects.
+    # default route and handing out a VMware address produces a link that looks fine and silently
+    # never connects.
+    #
+    # Tailscale is in that list too, but only as a second choice rather than a permanent exclusion:
+    # on the same wifi the LAN address is the better link, and off it the tailnet address is the
+    # only one that works at all. Preferring the LAN and falling back keeps both cases right.
     $excluded = 'Loopback|VMware|Hyper-V|vEthernet|Tailscale|NordLynx|VirtualBox|Bluetooth'
 
     $candidates = Get-NetIPAddress -AddressFamily IPv4 |
@@ -73,7 +91,16 @@ function Get-LanAddress {
     $fallback = $candidates | Select-Object -First 1
     if ($fallback) { return $fallback.IPAddress }
 
+    $tailnet = Get-TailnetAddress
+    if ($tailnet) { return $tailnet }
+
     return 'localhost'
+}
+
+function Test-TailnetAddress {
+    param([string] $Value)
+
+    return $Value -match '^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.'
 }
 
 function Test-PortFree {
@@ -142,8 +169,30 @@ if ($startWeb) {
     Write-Host '  Share this with the other three players:' -ForegroundColor DarkGray
     Write-Host "  http://${Address}:${WebPort}" -ForegroundColor Yellow
     Write-Host ''
-    Write-Host '  They need to be on the same wifi. If nothing loads on their phone, run' -ForegroundColor DarkGray
-    Write-Host '  tools\open-firewall.ps1 once, as administrator.' -ForegroundColor DarkGray
+    # When the game is running on wifi but somebody is playing from elsewhere, the LAN link above
+    # is no use to them and the tailnet one is. Both are printed rather than making the player who
+    # is out of the house know to ask for a flag.
+    $tailnet = Get-TailnetAddress
+    if ($tailnet -and -not (Test-TailnetAddress $Address)) {
+        Write-Host ''
+        Write-Host '  Playing from somewhere else? Use this instead, if they are on your tailnet:' -ForegroundColor DarkGray
+        Write-Host "  http://${tailnet}:${WebPort}" -ForegroundColor Yellow
+    }
+
+    Write-Host ''
+
+    if (Test-TailnetAddress $Address) {
+        # Over a tailnet none of the wifi advice applies: the other players can be anywhere, and
+        # the traffic arrives on the Tailscale interface, which the Windows firewall rules the
+        # open-firewall script writes have nothing to do with.
+        Write-Host '  This is your Tailscale address, so they can be anywhere - but they do have' -ForegroundColor DarkGray
+        Write-Host '  to be signed in to your tailnet. Run .\run.ps1 with no arguments on the same' -ForegroundColor DarkGray
+        Write-Host '  wifi to get a plain LAN link instead.' -ForegroundColor DarkGray
+    }
+    else {
+        Write-Host '  They need to be on the same wifi. If nothing loads on their phone, run' -ForegroundColor DarkGray
+        Write-Host '  tools\open-firewall.ps1 once, as administrator.' -ForegroundColor DarkGray
+    }
     Write-Host ''
 }
 

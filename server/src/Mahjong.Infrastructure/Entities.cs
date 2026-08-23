@@ -153,6 +153,7 @@ public class Game
 
     public List<GameAction> Actions { get; set; } = [];
     public List<GameFrame> Frames { get; set; } = [];
+    public List<HandArrangement> Arrangements { get; set; } = [];
     public HandResult? Result { get; set; }
 }
 
@@ -180,6 +181,31 @@ public class GameFrame
     public string StateJson { get; set; } = string.Empty;
 
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>
+/// How one player chose to lay their own tiles out this hand.
+///
+/// Purely how the hand is drawn on that player's screen - which tiles they pushed together into a
+/// group - and never anything the rules care about. It is here rather than in the browser because
+/// a phone that sleeps mid-hand reconnects with a fresh page, and losing the arrangement you just
+/// built by hand every time the screen locks makes the feature not worth having.
+///
+/// Scoped to a game, because the tile ids it holds only mean anything inside one hand.
+/// </summary>
+public class HandArrangement
+{
+    public long Id { get; set; }
+
+    public Guid GameId { get; set; }
+    public Game? Game { get; set; }
+
+    public Guid PlayerId { get; set; }
+
+    /// <summary>Tile ids as the player grouped them, e.g. <c>[[3,17,42],[8,9]]</c>.</summary>
+    public string GroupsJson { get; set; } = string.Empty;
+
+    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
 /// <summary>

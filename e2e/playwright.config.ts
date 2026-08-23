@@ -41,12 +41,12 @@ export default defineConfig({
     {
       name: 'tablet',
       use: { ...devices['Desktop Chrome'], viewport: { width: 768, height: 1024 }, isMobile: false },
-      testMatch: /responsive\.spec\.ts/,
+      testMatch: /(responsive|hand-layout|claim-timer)\.spec\.ts/,
     },
     {
       name: 'phone',
       use: { ...devices['Pixel 7'] },
-      testMatch: /responsive\.spec\.ts/,
+      testMatch: /(responsive|hand-layout|claim-timer)\.spec\.ts/,
     },
   ],
 });
