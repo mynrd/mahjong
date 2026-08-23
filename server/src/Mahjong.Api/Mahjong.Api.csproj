@@ -19,4 +19,31 @@
     <ProjectReference Include="..\Mahjong.Infrastructure\Mahjong.Infrastructure.csproj" />
   </ItemGroup>
 
+  <PropertyGroup>
+    <WebRoot>$(MSBuildProjectDirectory)\..\..\..\web\</WebRoot>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- wwwroot is build output, not source: the Angular build writes it and wipes it on every
+         run. Left in the default Content glob it would be picked up at evaluation time, before
+         the build has produced it, and then added a second time by PublishWebApp below - which
+         publish rejects as two files claiming the same path. -->
+    <Content Remove="wwwroot\**" />
+  </ItemGroup>
+
+  <Target Name="PublishWebApp" AfterTargets="ComputeFilesToPublish">
+    <!-- One `dotnet publish` produces one folder holding the API and the page it serves. Only on
+         publish: hanging this off Build would make every `dotnet test` wait on npm. -->
+    <Exec Command="npm ci" WorkingDirectory="$(WebRoot)" Condition="!Exists('$(WebRoot)node_modules')" />
+    <Exec Command="npx ng build --configuration production" WorkingDirectory="$(WebRoot)" />
+
+    <ItemGroup>
+      <_WebAppFiles Include="$(MSBuildProjectDirectory)\wwwroot\**" />
+      <ResolvedFileToPublish Include="@(_WebAppFiles)" Exclude="@(ResolvedFileToPublish)">
+        <RelativePath>wwwroot\%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+
 </Project>

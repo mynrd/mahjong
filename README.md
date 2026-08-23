@@ -21,23 +21,42 @@ the database `MahjongDb` is created automatically on first start.
 .\run.ps1
 ```
 
-`run.ps1` prints the address to share. It works out which network adapter to advertise, which
-matters on a machine with VPN and virtual adapters alongside the real card, and it checks the
-things that otherwise fail confusingly first: SQL Server not running, a port still held by a
-previous run, or `npm install` never having been run.
+`run.ps1` builds the web app, starts the server and prints the address to share. It works out
+which network adapter to advertise, which matters on a machine with VPN and virtual adapters
+alongside the real card, and it checks the things that otherwise fail confusingly first: SQL
+Server not running, a port still held by a previous run, or `npm install` never having been run.
 
-Ctrl+C stops both halves, including the child processes `dotnet run` and `npx` spawn - killing
-only the launcher leaves the real process still holding the port.
+Ctrl+C stops it, including the child processes `dotnet run` and `npx` spawn - killing only the
+launcher leaves the real process still holding the port.
 
-To run the two halves separately:
+One process serves everything on port 5080: the page, the REST endpoints and the websocket.
+`ng build` writes the page into `server/src/Mahjong.Api/wwwroot` (see `web/angular.json`) and
+Kestrel serves it from there, so there is one port to open, one link to hand out and one thing to
+deploy. The web app calls the API on the origin it was opened from, so nothing needs configuring
+per device.
+
+While working on the page, `-Watch` rebuilds it on every save. The browser does not reload itself;
+refresh the tab once the rebuild is logged. `-SkipWebBuild` starts against whatever is already in
+`wwwroot`, for restarts where only the server changed.
 
 ```powershell
-dotnet run --project server\src\Mahjong.Api --urls http://0.0.0.0:5080
-cd web; npx ng serve --host 0.0.0.0 --port 4200 --allowed-hosts
+.\run.ps1 -Watch
+.\run.ps1 -SkipWebBuild
 ```
 
-The web app finds the API on the same host it was itself opened from, so nothing needs configuring
-per device.
+By hand, without the script:
+
+```powershell
+cd web; npx ng build
+dotnet run --project server\src\Mahjong.Api --urls http://0.0.0.0:5080
+```
+
+To deploy, `dotnet publish` builds the web app into the output as part of the same command:
+
+```powershell
+dotnet publish server\src\Mahjong.Api -c Release -o publish
+.\publish\Mahjong.Api.exe --urls http://0.0.0.0:5080
+```
 
 ---
 
@@ -66,7 +85,7 @@ server/
 web/                           Angular 22, standalone components and signals
   public/tiles/                42 tile faces plus the back
 e2e/                           Playwright specs and screenshots
-run.ps1                        starts both halves and prints the link to share
+run.ps1                        builds the page, starts the server, prints the link to share
 tools/                         firewall rules
 ```
 
@@ -81,12 +100,12 @@ cd e2e; node smoke/play-hand.mjs      # plays six whole hands against the API, n
 cd e2e; node smoke/tile-sheet.mjs     # renders every tile face to screenshots/tiles.png
 ```
 
-The Playwright suite needs both halves running (`.\run.ps1`) and goes against the real API and the
+The Playwright suite needs the server running (`.\run.ps1`) and goes against the real API and the
 real database. Point it at a network address to test as a phone would:
 
 ```powershell
 cd e2e
-$env:WEB_URL = 'http://192.168.254.100:4200'; npx playwright test
+$env:WEB_URL = 'http://192.168.254.100:5080'; npx playwright test
 ```
 
 ### The one test worth knowing about

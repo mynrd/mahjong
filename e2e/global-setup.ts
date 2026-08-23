@@ -3,13 +3,13 @@ import { apiBaseUrlFor } from './specs/urls';
 /**
  * Runs once before the suite.
  *
- * Two jobs. First, fail immediately and legibly if the servers are not running, rather than
+ * Two jobs. First, fail immediately and legibly if the server is not running, rather than
  * letting every spec time out one by one against a dead port. Second, warm the API: its first
  * request builds the EF model, checks migrations and opens the first SQL connection, which took
  * long enough to make whichever spec happened to run first fail on its own.
  */
 export default async function globalSetup(): Promise<void> {
-  const webUrl = process.env.WEB_URL ?? 'http://localhost:4200';
+  const webUrl = process.env.WEB_URL ?? 'http://localhost:5080';
   const apiUrl = apiBaseUrlFor(webUrl);
 
   await waitFor('API', `${apiUrl}/api/health`, 60_000);
@@ -37,8 +37,8 @@ async function waitFor(what: string, url: string, timeoutMs: number): Promise<vo
 
   throw new Error(
     `The ${what} did not answer at ${url} within ${timeoutMs / 1000}s (${lastError}).\n` +
-      `Start both servers first, either with run.ps1 from the repo root or:\n` +
-      `  server:  dotnet run --project src/Mahjong.Api --urls http://0.0.0.0:5080\n` +
-      `  web:     npx ng serve --host 0.0.0.0 --port 4200 --allowed-hosts`,
+      `Start the server first, either with run.ps1 from the repo root or:\n` +
+      `  cd web; npx ng build\n` +
+      `  dotnet run --project server/src/Mahjong.Api --urls http://0.0.0.0:5080`,
   );
 }

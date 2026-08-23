@@ -6,9 +6,10 @@ import { defineConfig, devices } from '@playwright/test';
  * in play: a claim window that never closes, a reconnect that lands in the wrong seat, a hand
  * that renders off the bottom of a phone.
  *
- * Both servers must already be running. Start them with run.ps1 from the repo root, or by hand:
- *   server:  dotnet run --project src/Mahjong.Api --urls http://0.0.0.0:5080
- *   web:     npx ng serve --host 0.0.0.0 --port 4200 --allowed-hosts
+ * The server must already be running, with the web app built into its wwwroot. Start it with
+ * run.ps1 from the repo root, or by hand:
+ *   cd web; npx ng build
+ *   dotnet run --project server/src/Mahjong.Api --urls http://0.0.0.0:5080
  */
 export default defineConfig({
   testDir: './specs',
@@ -26,7 +27,7 @@ export default defineConfig({
   reporter: [['list'], ['html', { outputFolder: './playwright-report', open: 'never' }]],
 
   use: {
-    baseURL: process.env.WEB_URL ?? 'http://localhost:4200',
+    baseURL: process.env.WEB_URL ?? 'http://localhost:5080',
     trace: 'retain-on-failure',
     video: 'off',
     screenshot: 'only-on-failure',

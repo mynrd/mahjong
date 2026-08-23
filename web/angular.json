@@ -18,6 +18,10 @@
           "options": {
             "browser": "src/main.ts",
             "tsConfig": "tsconfig.app.json",
+            "outputPath": {
+              "base": "../server/src/Mahjong.Api/wwwroot",
+              "browser": ""
+            },
             "assets": [
               {
                 "glob": "**/*",
@@ -57,9 +61,6 @@
         },
         "serve": {
           "builder": "@angular/build:dev-server",
-          "options": {
-            "proxyConfig": "proxy.conf.json"
-          },
           "configurations": {
             "production": {
               "buildTarget": "web:build:production"

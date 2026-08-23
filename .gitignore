@@ -39,6 +39,10 @@ pnpm-debug.log*
 /web/out-tsc/
 /web/.angular/
 
+# Where `ng build` now writes, so the API can serve the page itself. Build output living inside
+# the server project, not source.
+/server/src/Mahjong.Api/wwwroot/
+
 # ---------------------------------------------------------------- playwright
 #
 # Everything under e2e/ that a test run produces. The screenshots are worth looking at while

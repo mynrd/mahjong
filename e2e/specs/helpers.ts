@@ -48,7 +48,7 @@ export async function createRoomWithRules(
   options: { hostName?: string; roomName?: string; password?: string } = {},
 ): Promise<{ host: Player; code: string }> {
   const name = options.hostName ?? 'Mynard';
-  const webUrl = process.env.WEB_URL ?? 'http://localhost:4200';
+  const webUrl = process.env.WEB_URL ?? 'http://localhost:5080';
 
   const response = await fetch(`${apiBaseUrlFor(webUrl)}/api/rooms`, {
     method: 'POST',

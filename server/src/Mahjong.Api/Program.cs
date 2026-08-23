@@ -43,23 +43,6 @@ builder.Services.AddSignalR().AddJsonProtocol(options =>
 });
 builder.Services.AddOpenApi();
 
-const string LanCors = "lan";
-
-builder.Services.AddCors(options => options.AddPolicy(LanCors, policy => policy
-    // Every origin is allowed. This is a game run on somebody's laptop for the four people in the
-    // room, reached from whatever address the router, the phone hotspot or the tailnet happens to
-    // hand out that day, and every attempt to match those by shape ended in a browser refusing to
-    // connect for a reason nobody wants to debug mid-game.
-    //
-    // AllowAnyOrigin cannot be used here: it sends Access-Control-Allow-Origin: *, which the
-    // browser rejects together with credentials, and SignalR's handshake carries them. Reflecting
-    // whatever Origin arrived is the same permission with a header the browser accepts.
-    .SetIsOriginAllowed(_ => true)
-    .AllowAnyHeader()
-    .AllowAnyMethod()
-    // SignalR needs credentials allowed for the websocket handshake to carry the connection id.
-    .AllowCredentials()));
-
 var app = builder.Build();
 
 // This is a LAN game on one machine, so the schema is brought up to date on boot rather than
@@ -72,7 +55,23 @@ using (var scope = app.Services.CreateScope())
 
 if (app.Environment.IsDevelopment()) app.MapOpenApi();
 
-app.UseCors(LanCors);
+// The Angular build writes into wwwroot (see web/angular.json), so one Kestrel serves both the
+// page and the API on one port. index.html is told not to cache: every other file is content
+// hashed and safe to keep forever, but a stale index.html points at hashed files a new build has
+// already deleted, and the game comes up blank until the player clears their cache.
+var staticFiles = new StaticFileOptions
+{
+    OnPrepareResponse = context =>
+    {
+        if (context.File.Name == "index.html")
+        {
+            context.Context.Response.Headers.CacheControl = "no-cache, no-store, must-revalidate";
+        }
+    },
+};
+
+app.UseDefaultFiles();
+app.UseStaticFiles(staticFiles);
 
 app.MapRoomEndpoints();
 app.MapReplayEndpoints();
@@ -84,6 +83,17 @@ app.MapGet("/api/health", async (MahjongDbContext db) => Results.Ok(new
     database = await db.Database.CanConnectAsync() ? "connected" : "unreachable",
     rooms = await db.Rooms.CountAsync(),
 }));
+
+// Client-side routes like /join/ABCD are not files on disk. Anything that reached here without
+// matching an endpoint or a file is one of those, so hand back the app and let the router sort it
+// out. Registered last, so the real endpoints and the files still win.
+//
+// The two narrower fallbacks keep the wrong answer out of the API: without them a typo in a path
+// or a call that outlived an endpoint gets 200 and a page of HTML, which the client parses as
+// JSON and reports as something entirely unrelated to the missing route.
+app.MapFallback("/api/{**rest}", () => Results.NotFound());
+app.MapFallback("/hubs/{**rest}", () => Results.NotFound());
+app.MapFallbackToFile("index.html", staticFiles);
 
 app.Run();
 
