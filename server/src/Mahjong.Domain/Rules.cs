@@ -132,6 +132,47 @@ public sealed record RuleOptions
     /// <summary>How long other players get to claim a discard before play moves on.</summary>
     public int ClaimWindowSeconds { get; init; } = 6;
 
+    /// <summary>
+    /// Whether the server tells a player what they could do. On, the claim window arrives with the
+    /// exact groups the seat could make and the hand is laid out by Auto Arrange. Off, the seat
+    /// gets four bare buttons and has to know its own hand, which is how the game is played on a
+    /// real table. Off also changes the timing: see <see cref="ClaimFulfilSeconds"/>.
+    /// </summary>
+    public bool AssistEnabled { get; init; } = true;
+
+    /// <summary>
+    /// With assist off there is no window deadline: a seat may declare whenever it finally
+    /// notices, and the discard only dies when the next seat draws. What is on a clock is naming
+    /// the tiles, and only for the two claims that outrank a chow. Press Pung or Kang and you have
+    /// this long to tap the tiles it costs, after which the claim is dropped and the tile falls to
+    /// whoever is next in priority. One press per seat per discard: a dropped claim cannot be
+    /// re-declared, or a seat could hold the table open forever.
+    /// </summary>
+    public int ClaimFulfilSeconds { get; init; } = 10;
+
+    /// <summary>
+    /// Assist off: how long the window on a bot's discard stays open.
+    ///
+    /// A human's discard has no deadline, because the people at the table can prompt each other:
+    /// somebody says "your turn, taking it or not". Nobody says that when the tile came from a bot,
+    /// so that window gets a clock instead. It only bounds noticing the tile. A seat that presses
+    /// pung or kang in time keeps its full <see cref="ClaimFulfilSeconds"/> to name the tiles even
+    /// once this has run out.
+    /// </summary>
+    public int BotDiscardWindowSeconds { get; init; } = 10;
+
+    /// <summary>
+    /// Assist off: how long a bot sitting in the seat due to play next waits before drawing and
+    /// killing the discard.
+    ///
+    /// An assist-off window is ended by the next seat drawing, and nothing else. When that seat is
+    /// a human, taking as long as they like is the point. When it is a bot, the same rule would
+    /// freeze the table forever the moment one human stopped answering, because a bot that has
+    /// already passed has nothing else it will ever do. So it waits this long and then plays on,
+    /// which is what the person it is standing in for would have done.
+    /// </summary>
+    public int BotPatienceSeconds { get; init; } = 20;
+
     /// <summary>Whether the mano keeps the deal when a hand ends with no winner.</summary>
     public bool ManoKeepsSeatOnDraw { get; init; } = true;
 

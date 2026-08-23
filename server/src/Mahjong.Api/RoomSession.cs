@@ -32,10 +32,11 @@ public sealed class RoomSession(Guid roomId, string code)
     public ConcurrentDictionary<int, HashSet<string>> Connections { get; } = new();
 
     /// <summary>
-    /// When the current claim window closes. The ticker uses this rather than a timer per window,
-    /// so a window still expires correctly after a server restart mid-hand.
+    /// The next thing the open claim window has due: its own deadline, or the soonest naming clock
+    /// on a seat that pressed pung or kang. The ticker uses this rather than a timer per window, so
+    /// both still fire correctly after a server restart mid-hand.
     /// </summary>
-    public DateTimeOffset? ClaimDeadline => State?.Pending?.DeadlineUtc;
+    public DateTimeOffset? ClaimDeadline => State?.Pending?.NextDeadline;
 
     /// <summary>When a bot is next allowed to move, so bots do not play instantly and unreadably.</summary>
     public DateTimeOffset BotNotBefore { get; set; } = DateTimeOffset.MinValue;

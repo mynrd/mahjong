@@ -56,6 +56,30 @@ import { Session } from '../core/session';
           />
         </label>
 
+        <!-- The one house rule worth asking about before the table exists, because it changes how
+             the game is played rather than what it pays. On, the server points out every claim you
+             could make and lays your hand out for you. Off, it says nothing and you call your own
+             tiles, which is how it works on a real table. -->
+        <div class="field toggle">
+          <label class="switch">
+            <input
+              type="checkbox"
+              name="allowHelper"
+              [(ngModel)]="allowHelper"
+              data-testid="allow-helper"
+            />
+            <span>Allow Helper</span>
+          </label>
+          <small class="muted">
+            @if (allowHelper) {
+              The table points out what you can pung, chow or kang, and sorts your hand for you.
+            } @else {
+              Nothing is pointed out and nothing is sorted. You press the call yourself and pick the
+              tiles it costs. Press Pung or Kang and you get 10 seconds to name them.
+            }
+          </small>
+        </div>
+
         <button class="btn wide" type="submit" [disabled]="busy()" data-testid="create-submit">
           {{ busy() ? 'Setting up...' : 'Create table' }}
         </button>
@@ -108,6 +132,25 @@ import { Session } from '../core/session';
       font-size: 12.5px;
     }
 
+    .toggle {
+      display: block;
+    }
+
+    .switch {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 650;
+      cursor: pointer;
+    }
+
+    .switch input {
+      width: 18px;
+      height: 18px;
+      flex: 0 0 auto;
+      accent-color: var(--gold);
+    }
+
     .rejoin {
       margin-top: 18px;
     }
@@ -126,6 +169,9 @@ export class CreatePage {
   protected name = 'Sunday game';
   protected password = '';
   protected displayName = '';
+
+  /** Frozen into the table's rules on create and fixed for every hand played at it. */
+  protected allowHelper = true;
 
   protected readonly busy = signal(false);
   protected readonly error = signal<string | null>(null);
@@ -151,7 +197,12 @@ export class CreatePage {
     this.error.set(null);
 
     try {
-      const seated = await this.api.createRoom({ name, password: this.password, displayName });
+      const seated = await this.api.createRoom({
+        name,
+        password: this.password,
+        displayName,
+        assistEnabled: this.allowHelper,
+      });
 
       this.session.save({
         roomCode: seated.roomCode,

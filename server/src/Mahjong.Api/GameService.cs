@@ -45,6 +45,11 @@ public sealed class GameService(
 
             var (state, events) = MahjongGame.Deal(rules, handNumber, mano, seed, clock.GetUtcNow());
 
+            // Which seats are bots is a fact about the room, but the rules need it: an assist-off
+            // window on a bot's discard is the one that gets a deadline. Stamped in before the
+            // state is serialised, so it survives a restart mid-hand along with everything else.
+            foreach (var bot in room.Players.Where(p => p.IsBot)) state.BotSeats.Add(bot.Seat);
+
             var game = new Game
             {
                 RoomId = room.Id,
@@ -91,7 +96,7 @@ public sealed class GameService(
             {
                 events = move switch
                 {
-                    GameMove.Draw => MahjongGame.Draw(state, seat),
+                    GameMove.Draw => MahjongGame.Draw(state, seat, now),
                     GameMove.Discard d => MahjongGame.Discard(state, seat, d.TileId, now),
                     GameMove.Claim c => MahjongGame.Claim(state, seat, c.Kind, c.TileIds, now),
                     GameMove.Pass => MahjongGame.Pass(state, seat, now),
@@ -130,9 +135,14 @@ public sealed class GameService(
         await session.RunAsync(async () =>
         {
             if (session.State is not { Phase: GamePhase.AwaitingClaims } state) return;
-            if (state.Pending is null || state.Pending.DeadlineUtc > clock.GetUtcNow()) return;
 
-            var events = MahjongGame.ExpireClaimWindow(state, clock.GetUtcNow());
+            var now = clock.GetUtcNow();
+
+            // NextDeadline covers both clocks a window can be running: its own, and the ten seconds
+            // each seat that pressed pung or kang has to name the tiles. Nothing due, nothing to do.
+            if (state.Pending is not { NextDeadline: { } due } || due > now) return;
+
+            var events = MahjongGame.ExpireClaimWindow(state, now);
             if (events.Count == 0) return;
 
             var game = await db.Games.FirstAsync(g => g.Id == session.GameId, cancel);

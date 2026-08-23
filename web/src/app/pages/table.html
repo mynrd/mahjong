@@ -166,18 +166,20 @@
           <!-- On/off in the chip itself. "Auto Arrange" on its own says what the button is about
                but not which way it is set, and the difference between a laid-out hand and a hand
                you laid out yourself is not always obvious from the tiles. -->
-          <button
-            class="chip switch"
-            type="button"
-            [class.on]="arranged()"
-            (click)="toggleArrange()"
-            [attr.aria-pressed]="arranged()"
-            [attr.aria-label]="'Auto arrange ' + (arranged() ? 'on' : 'off')"
-            data-testid="auto-arrange"
-          >
-            <span aria-hidden="true">AA</span>
-            <span class="state" aria-hidden="true">{{ arranged() ? 'ON' : 'OFF' }}</span>
-          </button>
+          @if (assisted()) {
+            <button
+              class="chip switch"
+              type="button"
+              [class.on]="arranged()"
+              (click)="toggleArrange()"
+              [attr.aria-pressed]="arranged()"
+              [attr.aria-label]="'Auto arrange ' + (arranged() ? 'on' : 'off')"
+              data-testid="auto-arrange"
+            >
+              <span aria-hidden="true">AA</span>
+              <span class="state" aria-hidden="true">{{ arranged() ? 'ON' : 'OFF' }}</span>
+            </button>
+          }
         </div>
 
         <!-- Shown only once a tile is actually picked up. Grouping is always available with Auto
@@ -271,13 +273,19 @@
                 [badgeText]="claimWins() ? '!' : null"
                 [joker]="isJoker(pending.tile.code)"
               />
-              <span class="countdown" data-testid="claim-strip-countdown">{{ claimSeconds() }}s</span>
+              @if (claimTimed()) {
+                <span class="countdown" data-testid="claim-strip-countdown">{{ claimSeconds() }}s</span>
+              }
             </div>
 
             <div class="claim-buttons">
               @if (!claimDialogOpen()) {
                 <button class="btn" type="button" (click)="openClaimDialog()" data-testid="claim-open">
-                  {{ candidates().length ? 'Options (' + candidates().length + ')' : 'Options' }}
+                  @if (assisted()) {
+                    {{ candidates().length ? 'Options (' + candidates().length + ')' : 'Options' }}
+                  } @else {
+                    Take
+                  }
                 </button>
               }
 
@@ -289,7 +297,27 @@
               >
                 Pass
               </button>
+
+              <!-- Only the seat about to play gets this, and only at an unassisted table. Passing
+                   says "not for me" and leaves the window open on everyone else; there is no
+                   deadline behind it, so somebody has to be able to move the game on. -->
+              @if (canDrawThrough()) {
+                <button class="btn secondary" type="button" (click)="drawInstead()" data-testid="claim-draw">
+                  Draw instead
+                </button>
+              }
             </div>
+          </div>
+        } @else if (pending.burned) {
+          <span class="prompt" data-testid="claim-burned">
+            Out of time to name your tiles. That one is gone.
+          </span>
+        } @else if (canDrawThrough()) {
+          <div class="claim" data-testid="claim-strip">
+            <span class="prompt">Waiting for the others...</span>
+            <button class="btn secondary" type="button" (click)="drawInstead()" data-testid="claim-draw">
+              Draw instead
+            </button>
           </div>
         } @else {
           <span class="prompt">Waiting for the others...</span>
@@ -362,7 +390,11 @@
 
             <div class="claim-what">
               <strong>{{ view.seats[pending.fromSeat].displayName }} threw {{ label(pending.tile.code) }}</strong>
-              <span class="countdown" data-testid="claim-countdown">{{ claimSeconds() }}s</span>
+              @if (claimTimed()) {
+                <span class="countdown" data-testid="claim-countdown">{{ claimSeconds() }}s</span>
+              } @else {
+                <span class="countdown quiet" data-testid="claim-countdown">no rush</span>
+              }
             </div>
 
             <button
@@ -376,7 +408,34 @@
             </button>
           </header>
 
-          @if (candidates().length) {
+          @if (!assisted()) {
+            <!-- Nothing has been worked out for this player, so there is nothing to list. The four
+                 calls go up instead, and pressing one is only half an answer: the tiles it costs
+                 are tapped out of the hand afterwards. Pung and Kang start a clock when pressed,
+                 because a chow may be waiting underneath them for the tile. -->
+            @if (pressedKind(); as pressed) {
+              <p class="claim-naming" data-testid="claim-naming">
+                <strong>{{ pressed }}</strong> - now tap the
+                {{ pressed === 'Kang' ? 'three' : 'two' }} tiles in your hand it costs.
+              </p>
+            } @else {
+              <div class="calls" data-testid="claim-calls">
+                @for (kind of manualKinds; track kind) {
+                  <button
+                    class="option call"
+                    [class.danger]="kind === 'Todas'"
+                    type="button"
+                    (click)="pressCall(kind)"
+                    [attr.data-testid]="'claim-call-' + kind"
+                    [attr.data-claim-kind]="kind"
+                    [attr.aria-label]="kind"
+                  >
+                    <span class="option-kind">{{ kind === 'Todas' ? 'Todas!' : kind }}</span>
+                  </button>
+                }
+              </div>
+            }
+          } @else if (candidates().length) {
             <!-- One row per option, drawn as the set it would make. "Chow B3-B4-B5" only means
                  something to somebody who already reads the notation; three tiles in a row mean
                  the same thing to everybody. -->
@@ -417,9 +476,21 @@
           }
 
           <div class="claim-foot">
-            <button class="btn" type="button" (click)="takePick()" [disabled]="!pickMatch()" data-testid="claim-take">
-              {{ pickMatch() ? 'Take - ' + pickMatch()!.describe : 'Take' }}
-            </button>
+            @if (assisted()) {
+              <button class="btn" type="button" (click)="takePick()" [disabled]="!pickMatch()" data-testid="claim-take">
+                {{ pickMatch() ? 'Take - ' + pickMatch()!.describe : 'Take' }}
+              </button>
+            } @else {
+              <button
+                class="btn"
+                type="button"
+                (click)="confirmPress()"
+                [disabled]="!pickReady()"
+                data-testid="claim-take"
+              >
+                Take
+              </button>
+            }
             <button class="btn secondary" type="button" (click)="pass()" data-testid="claim-pass">Pass</button>
           </div>
 
@@ -427,8 +498,13 @@
             <p class="claim-invalid" data-testid="claim-invalid" role="alert">{{ problem }}</p>
           } @else {
             <p class="legend" data-testid="claim-legend">
-              Or tap tiles in your hand and press Take. Green outline with a letter = one way to use
-              that tile, dashed gold = more than one, red = this tile wins the hand.
+              @if (assisted()) {
+                Or tap tiles in your hand and press Take. Green outline with a letter = one way to use
+                that tile, dashed gold = more than one, red = this tile wins the hand.
+              } @else {
+                Nothing is marked for you at this table. Press the call, then tap the tiles it costs
+                and press Take.
+              }
             </p>
           }
 

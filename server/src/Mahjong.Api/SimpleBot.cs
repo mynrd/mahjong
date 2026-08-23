@@ -13,13 +13,35 @@ namespace Mahjong.Api;
 public static class SimpleBot
 {
     /// <summary>Decides the bot's next move, or null if it has nothing to do right now.</summary>
-    public static GameMove? Decide(GameState state, int seat) => state.Phase switch
+    public static GameMove? Decide(GameState state, int seat, DateTimeOffset now) => state.Phase switch
     {
         GamePhase.AwaitingDraw when state.CurrentSeat == seat => new GameMove.Draw(),
         GamePhase.AwaitingDiscard when state.CurrentSeat == seat => DecideOnTurn(state, seat),
         GamePhase.AwaitingClaims when CanStillAnswer(state, seat) => DecideOnClaim(state, seat),
+        GamePhase.AwaitingClaims when OutOfPatience(state, seat, now) => new GameMove.Draw(),
         _ => null,
     };
+
+    /// <summary>
+    /// Whether this bot should end an assist-off claim window by drawing through it.
+    ///
+    /// Only the seat due to play next can, and only once it has answered for itself and nobody is
+    /// inside their ten seconds to name tiles. Without this a table freezes for good the moment one
+    /// human stops answering: an assist-off window has no deadline, so the only thing that ends it
+    /// is this draw, and a bot that has already passed would otherwise never make another move.
+    /// </summary>
+    private static bool OutOfPatience(GameState state, int seat, DateTimeOffset now)
+    {
+        if (state.Rules.AssistEnabled) return false;
+        if (state.Pending is not { } pending) return false;
+        if (seat != GameState.NextSeat(state.CurrentSeat)) return false;
+        if (CanStillAnswer(state, seat)) return false;
+
+        // Somebody is mid-claim. That wait is already bounded, so let it run out on its own.
+        if (pending.NamingDeadline.Count > 0) return false;
+
+        return now >= pending.OpenedUtc.AddSeconds(state.Rules.BotPatienceSeconds);
+    }
 
     private static GameMove DecideOnTurn(GameState state, int seat)
     {
@@ -35,8 +57,12 @@ public static class SimpleBot
     /// <summary>
     /// Answers an open claim window. Candidates come back strongest kind first, which is the same
     /// order the engine resolves a contested tile in, so the first one the bot is willing to take
-    /// is the one to declare. The tiles are left unnamed: the engine then picks which physical
-    /// copies out of the hand the group is built from.
+    /// is the one to declare, naming the exact tiles the group is built from.
+    ///
+    /// Naming them matters at an assist-off table, where an unnamed claim is only half an answer:
+    /// a human presses the button first and works out what it costs afterwards, and the engine
+    /// holds the window open for them. A bot has already done both, so it says both at once and
+    /// plays the same way whatever the table has assist set to.
     /// </summary>
     private static GameMove DecideOnClaim(GameState state, int seat)
     {
@@ -45,7 +71,7 @@ public static class SimpleBot
 
         foreach (var candidate in candidates)
             if (IsWorthTaking(state, seat, candidate))
-                return new GameMove.Claim(candidate.Kind, []);
+                return new GameMove.Claim(candidate.Kind, candidate.Support.Select(t => t.Id).ToArray());
 
         return new GameMove.Pass();
     }

@@ -18,6 +18,14 @@ public sealed record CreateRoomRequest
 
     /// <summary>House rules. Null uses the defaults from RULES.md.</summary>
     public RuleOptions? Rules { get; init; }
+
+    /// <summary>
+    /// The one house rule the create form asks about, applied on top of whichever ruleset above was
+    /// used. Its own field rather than a key inside <see cref="Rules"/> because sending a Rules
+    /// object to set one switch would throw away every value the server has configured and silently
+    /// fall back to the compiled defaults for the rest. Null leaves the setting alone.
+    /// </summary>
+    public bool? AssistEnabled { get; init; }
 }
 
 /// <summary>Take one of the free seats at an existing table.</summary>

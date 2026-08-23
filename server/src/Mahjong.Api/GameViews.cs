@@ -66,10 +66,28 @@ public sealed record ClaimCandidateView(
 /// tile claimable as either a chow or a pung produces two entries, and two possible chows produce
 /// two entries. Highest-ranked kind first.
 /// </param>
+/// <param name="DeadlineUtc">Null at an assist-off table, where the window has no deadline.</param>
+/// <param name="PressedKind">
+/// Assist off: what this seat has pressed and is still naming tiles for. The dialog stays open on
+/// it until the tiles are named or <paramref name="NamingDeadlineUtc"/> passes.
+/// </param>
+/// <param name="NamingDeadlineUtc">
+/// When the press above is dropped for taking too long. Set for a pung or kang, null for a chow,
+/// which is not on a clock.
+/// </param>
+/// <param name="Burned">
+/// This seat pressed pung or kang and never named the tiles in time. It is out of this discard and
+/// its buttons are dead.
+/// </param>
+/// <param name="YouClaimed">
+/// This seat has a claim on the tile, finished or half made. Distinct from <paramref name="YouAnswered"/>,
+/// which is also true of a plain pass: the client needs the difference to know whether offering to
+/// draw through the window would be throwing away something the player already called.
+/// </param>
 public sealed record ClaimPromptView(
     TileView Tile,
     int FromSeat,
-    DateTimeOffset DeadlineUtc,
+    DateTimeOffset? DeadlineUtc,
     /// <summary>
     /// How long the window was when it opened. The deadline alone says when time runs out but not
     /// how much there was, and a countdown bar needs both to know how full to draw itself. Sent
@@ -78,7 +96,12 @@ public sealed record ClaimPromptView(
     int WindowSeconds,
     IReadOnlyList<ClaimKind> YourOptions,
     IReadOnlyList<ClaimCandidateView> Candidates,
-    bool YouAnswered);
+    bool YouAnswered,
+    ClaimKind? PressedKind,
+    DateTimeOffset? NamingDeadlineUtc,
+    int NamingSeconds,
+    bool Burned,
+    bool YouClaimed);
 
 /// <summary>What the player whose turn it is may do right now.</summary>
 public sealed record TurnOptionsView(
@@ -117,7 +140,13 @@ public sealed record PlayerGameView(
     IReadOnlyList<DiscardView> Discards,
     ClaimPromptView? Claim,
     TurnOptionsView? YourTurn,
-    OutcomeView? Outcome)
+    OutcomeView? Outcome,
+    /// <summary>
+    /// Whether this table lets the server help. Off, no claim is ever spelled out and no hand is
+    /// ever laid out for you. The client needs it on the view rather than only in the room's rules
+    /// because it changes what the table draws, not just what it is allowed to send.
+    /// </summary>
+    bool Assisted)
 {
     public bool IsYourTurn => CurrentSeat == YourSeat && Phase is GamePhase.AwaitingDraw or GamePhase.AwaitingDiscard;
 }
@@ -151,8 +180,9 @@ public static class GameViewBuilder
                 // The one line that decides whether this game is cheatable.
                 seat == forSeat ? hand.Concealed.Select(TileView.Of).ToList() : null,
                 // Same rule: the grouping is read off the concealed tiles, so handing it to
-                // anyone else would hand them the hand.
-                seat == forSeat ? BuildGroups(state, hand) : null,
+                // anyone else would hand them the hand. And with assist off nobody gets it at all,
+                // including its owner: reading your own hand is the thing the setting is about.
+                seat == forSeat && state.Rules.AssistEnabled ? BuildGroups(state, hand) : null,
                 hand.Melds.Select(ToView).ToList(),
                 hand.Bonus.Select(TileView.Of).ToList(),
                 info.Balance));
@@ -171,7 +201,8 @@ public static class GameViewBuilder
             state.Discards.Select(d => new DiscardView(d.Seat, TileView.Of(d.Tile), d.Claimed)).ToList(),
             BuildClaim(state, forSeat),
             BuildTurnOptions(state, forSeat),
-            BuildOutcome(state));
+            BuildOutcome(state),
+            state.Rules.AssistEnabled);
     }
 
     private static IReadOnlyList<HandGroupView> BuildGroups(GameState state, PlayerHand hand) =>
@@ -198,8 +229,26 @@ public static class GameViewBuilder
         if (state.Pending is not { } pending || forSeat < 0) return null;
         if (pending.FromSeat == forSeat) return null;
 
-        var candidates = MahjongGame.ClaimCandidates(state, pending.Tile, pending.FromSeat, forSeat);
-        if (candidates.Count == 0) return null;
+        var assisted = state.Rules.AssistEnabled;
+
+        // Assist on, the prompt is only worth sending to a seat that could do something with the
+        // tile. Assist off, it goes to all three: which of them can act is exactly what the server
+        // is not saying, and a prompt that only appeared for the seats holding a pair would say it.
+        var candidates = assisted
+            ? MahjongGame.ClaimCandidates(state, pending.Tile, pending.FromSeat, forSeat)
+            : [];
+
+        if (assisted && candidates.Count == 0) return null;
+
+        pending.Declared.TryGetValue(forSeat, out var mine);
+        pending.NamingDeadline.TryGetValue(forSeat, out var namingBy);
+
+        // A seat part way through a press has not answered: the dialog has to stay up, because
+        // naming the tiles is the half of the answer it still owes. The server's own pass on a seat
+        // holding nothing is not an answer either, for the reason on PendingClaim.AutoPassed.
+        var answered =
+            (pending.Passed.Contains(forSeat) && !pending.AutoPassed.Contains(forSeat))
+            || mine is { AwaitingTiles: false };
 
         return new ClaimPromptView(
             TileView.Of(pending.Tile),
@@ -215,7 +264,12 @@ public static class GameViewBuilder
                     c.Support.Select(t => t.Id).ToList(),
                     c.Describe(pending.Tile)))
                 .ToList(),
-            pending.Passed.Contains(forSeat) || pending.Declared.ContainsKey(forSeat));
+            answered,
+            mine is { AwaitingTiles: true } ? mine.Kind : null,
+            namingBy == default ? null : namingBy,
+            state.Rules.ClaimFulfilSeconds,
+            pending.Burned.Contains(forSeat),
+            mine is not null);
     }
 
     private static TurnOptionsView? BuildTurnOptions(GameState state, int forSeat)

@@ -123,12 +123,36 @@ public static class MahjongGame
     /// The current seat takes a tile from the front of the wall, exposing and replacing any bonus
     /// tiles it turns up along the way.
     /// </summary>
-    public static List<GameEvent> Draw(GameState state, int seat)
+    public static List<GameEvent> Draw(GameState state, int seat, DateTimeOffset now)
     {
+        var events = new List<GameEvent>();
+
+        // An assist-off claim window has no deadline of its own, so this is what ends one nobody
+        // wanted: the seat due to play next picks up, exactly as it would at a real table, and the
+        // discard is dead. Anything already claimed still beats the draw - the tile goes to the
+        // claimant and this seat does not get its turn yet.
+        if (state.Phase == GamePhase.AwaitingClaims && state.Pending is { } waiting
+            && !state.Rules.AssistEnabled && seat == GameState.NextSeat(state.CurrentSeat))
+        {
+            // Whoever is still inside their ten seconds gets them. The wait is bounded, and letting
+            // the next seat draw through it would make the clock decorative.
+            Require(waiting.NamingDeadline.Count == 0,
+                "Somebody has claimed that tile and is still choosing which tiles it costs.");
+
+            // Drawing is this seat saying it does not want the discard, so its own half-made claim
+            // goes with it.
+            waiting.Declared.Remove(seat);
+            waiting.NamingDeadline.Remove(seat);
+            waiting.Passed.Add(seat);
+
+            events.AddRange(TryCloseClaimWindow(state, now, forced: true));
+
+            // A claim took the tile. That seat is now on turn, not this one.
+            if (state.Phase != GamePhase.AwaitingDraw || state.CurrentSeat != seat) return events;
+        }
+
         Require(state.Phase == GamePhase.AwaitingDraw, $"Seat {seat} cannot draw during {state.Phase}.");
         Require(seat == state.CurrentSeat, $"It is seat {state.CurrentSeat}'s turn, not seat {seat}'s.");
-
-        var events = new List<GameEvent>();
 
         if (state.WallExhausted)
         {
@@ -188,17 +212,38 @@ public static class MahjongGame
         {
             Tile = tile,
             FromSeat = seat,
-            DeadlineUtc = now.AddSeconds(state.Rules.ClaimWindowSeconds),
+            OpenedUtc = now,
+            DeadlineUtc = ClaimDeadlineFor(state, seat, now),
         };
 
         // Seats with nothing to claim are treated as having passed already, so the window closes
         // as soon as the seats that actually have a decision have made it.
         for (var other = 0; other < Seats; other++)
             if (other != seat && !allowed.ContainsKey(other))
+            {
                 state.Pending.Passed.Add(other);
+                state.Pending.AutoPassed.Add(other);
+            }
 
         events.Add(new ClaimWindowOpened(tile, seat, state.Pending.DeadlineUtc, allowed) { Seat = seat });
         return events;
+    }
+
+    /// <summary>
+    /// When the window on this discard closes by itself, or null when it does not.
+    ///
+    /// Assist on, always the house window. Assist off, it depends who threw the tile. A human's
+    /// discard gets no deadline: nobody was told what the tile was good for, so timing them out for
+    /// failing to spot it is exactly the thing the setting is against, and the people at the table
+    /// can chase each other. A bot's discard gets a short one, because nobody is going to.
+    /// </summary>
+    private static DateTimeOffset? ClaimDeadlineFor(GameState state, int discarder, DateTimeOffset now)
+    {
+        if (state.Rules.AssistEnabled) return now.AddSeconds(state.Rules.ClaimWindowSeconds);
+
+        return state.BotSeats.Contains(discarder)
+            ? now.AddSeconds(state.Rules.BotDiscardWindowSeconds)
+            : null;
     }
 
     /// <summary>A seat says it does not want the discard.</summary>
@@ -209,7 +254,9 @@ public static class MahjongGame
         Require(seat != state.Pending!.FromSeat, "The discarding seat has nothing to pass on.");
 
         state.Pending.Declared.Remove(seat);
+        state.Pending.NamingDeadline.Remove(seat);
         state.Pending.Passed.Add(seat);
+        state.Pending.AutoPassed.Remove(seat);
 
         return TryCloseClaimWindow(state, now, forced: false);
     }
@@ -223,6 +270,21 @@ public static class MahjongGame
 
         var pending = state.Pending!;
         Require(seat != pending.FromSeat, "A seat cannot claim its own discard.");
+        Require(!pending.Burned.Contains(seat),
+            $"Seat {seat} ran out of time to name its tiles and is out of this discard.");
+
+        // A pung or kang press is spent the moment it is made: the only thing that may follow it
+        // is the tiles it costs. Without this a seat could bounce between kinds and keep restarting
+        // its own clock, and the chow ranked underneath would never get the tile. Todas is the one
+        // way out, because it names no tiles and so resolves on the spot rather than extending
+        // anything, and losing a win to having pressed the wrong button first would be absurd.
+        if (pending.NamingDeadline.ContainsKey(seat) && kind != ClaimKind.Todas)
+        {
+            var pressed = pending.Declared[seat];
+            Require(kind == pressed.Kind,
+                $"Seat {seat} already pressed {pressed.Kind} on this tile and cannot switch to {kind}.");
+            Require(tileIds.Count > 0, $"Seat {seat} has already pressed {pressed.Kind}. Name the tiles it costs.");
+        }
 
         var candidates = ClaimCandidates(state, pending.Tile, pending.FromSeat, seat);
         Require(candidates.Any(c => c.Kind == kind),
@@ -251,19 +313,72 @@ public static class MahjongGame
         }
 
         pending.Passed.Remove(seat);
-        pending.Declared[seat] = new DeclaredClaim(kind, declaredTiles);
+
+        // With assist off, pressing a button and naming the tiles are two separate acts. Nobody was
+        // told what the discard was good for, so the press is a seat saying "that one is mine" a
+        // good while before it has worked out which of its own tiles pay for it. An empty press is
+        // that first act. A todas names no tiles at any table, so it is never waiting on any.
+        var awaitingTiles = !state.Rules.AssistEnabled && declaredTiles.Count == 0 && kind != ClaimKind.Todas;
+
+        pending.Declared[seat] = new DeclaredClaim(kind, declaredTiles, awaitingTiles);
+
+        if (awaitingTiles)
+        {
+            // Only the claims that outrank a chow are put on a clock, and only if one is not
+            // already running for this seat. A chow has nothing ranked under it waiting to be let
+            // through, so there is nobody for it to keep waiting and it is left alone.
+            if (kind is ClaimKind.Pung or ClaimKind.Kang && !pending.NamingDeadline.ContainsKey(seat))
+                pending.NamingDeadline[seat] = now.AddSeconds(state.Rules.ClaimFulfilSeconds);
+        }
+        else
+        {
+            pending.NamingDeadline.Remove(seat);
+        }
 
         return TryCloseClaimWindow(state, now, forced: false);
     }
 
     /// <summary>
-    /// Closes the claim window because the deadline passed. Seats that never answered are read as
-    /// having passed.
+    /// Runs whatever clocks the open window has. With assist on that is the window deadline, which
+    /// closes it and reads every seat that never answered as having passed. With assist off there is
+    /// no window deadline, only the ten seconds each seat that pressed pung or kang has to name the
+    /// tiles: those that run out are dropped, and the tile falls to whatever was ranked under them.
     /// </summary>
     public static List<GameEvent> ExpireClaimWindow(GameState state, DateTimeOffset now)
     {
-        if (state.Phase != GamePhase.AwaitingClaims || state.Pending is null) return [];
-        return TryCloseClaimWindow(state, now, forced: true);
+        if (state.Phase != GamePhase.AwaitingClaims || state.Pending is not { } pending) return [];
+
+        var lapsed = pending.NamingDeadline
+            .Where(kv => kv.Value <= now)
+            .Select(kv => kv.Key)
+            .ToList();
+
+        foreach (var seat in lapsed) Burn(pending, seat);
+
+        var windowExpired = pending.DeadlineUtc is { } deadline && deadline <= now;
+
+        // A naming clock outlives the window deadline. A seat that pressed in time was promised its
+        // ten seconds to name the tiles, and taking the tile off it half way through because the
+        // window happened to run out would make that promise a lie. The expired deadline is not
+        // forgotten: it closes the window on the next tick, once nobody is still choosing.
+        if (windowExpired && pending.NamingDeadline.Count > 0) windowExpired = false;
+
+        // Called on every tick, so it has to be able to say "nothing was due yet".
+        if (!windowExpired && lapsed.Count == 0) return [];
+
+        return TryCloseClaimWindow(state, now, forced: windowExpired);
+    }
+
+    /// <summary>
+    /// Takes a seat out of the discard for good, because it pressed and never named its tiles.
+    /// Counted as a pass so the window can finish without it.
+    /// </summary>
+    private static void Burn(PendingClaim pending, int seat)
+    {
+        pending.NamingDeadline.Remove(seat);
+        pending.Declared.Remove(seat);
+        pending.Burned.Add(seat);
+        pending.Passed.Add(seat);
     }
 
     // ------------------------------------------------------------------ declarations on your own turn
@@ -467,10 +582,20 @@ public static class MahjongGame
     private static List<GameEvent> TryCloseClaimWindow(GameState state, DateTimeOffset now, bool forced)
     {
         var pending = state.Pending!;
+
+        // A seat that has pressed but not yet named its tiles has not finished answering, whatever
+        // the count says. Nothing resolves until it does, its clock runs out, or the next seat draws.
+        if (!forced && pending.Declared.Values.Any(c => c.AwaitingTiles)) return [];
+
         var answered = pending.Declared.Count + pending.Passed.Count;
 
         // Three other seats have to be accounted for before the tile can move on.
         if (!forced && answered < Seats - 1) return [];
+
+        // Forced means the deadline passed or the next seat drew. Either way a press that never
+        // became a claim is dropped rather than guessed at: the seat never said what it cost.
+        foreach (var seat in pending.Declared.Where(kv => kv.Value.AwaitingTiles).Select(kv => kv.Key).ToList())
+            Burn(pending, seat);
 
         if (pending.Declared.Count == 0)
         {

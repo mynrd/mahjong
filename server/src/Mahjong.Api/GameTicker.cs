@@ -84,7 +84,7 @@ public sealed class GameTicker(
 
         foreach (var seat in botSeats)
         {
-            var move = SimpleBot.Decide(state, seat);
+            var move = SimpleBot.Decide(state, seat, now);
             if (move is null) continue;
 
             var result = await games.MoveAsync(session.Code, seat, move, cancel);

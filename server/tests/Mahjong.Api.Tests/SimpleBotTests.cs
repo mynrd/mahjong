@@ -19,14 +19,18 @@ public class SimpleBotTests
     /// <paramref name="botHand"/>. Hand and discard are cut from one id pool, so the discarded
     /// tile is never a copy the bot is also holding.
     /// </summary>
-    private static GameState Window(string botHand, string discard, Tile? joker = null)
+    private static GameState Window(
+        string botHand,
+        string discard,
+        Tile? joker = null,
+        bool assisted = true)
     {
         var refs = TileNotation.ParseRefs($"{botHand} {discard}");
         var tile = refs[^1];
 
         var state = new GameState
         {
-            Rules = RuleOptions.Default with { JokerEnabled = joker is not null },
+            Rules = RuleOptions.Default with { JokerEnabled = joker is not null, AssistEnabled = assisted },
             HandNumber = 1,
             ManoSeat = 0,
             Seed = 1,
@@ -44,11 +48,22 @@ public class SimpleBotTests
         {
             Tile = tile,
             FromSeat = DiscarderSeat,
-            DeadlineUtc = Now.AddSeconds(6),
+            OpenedUtc = Now,
+            DeadlineUtc = assisted ? Now.AddSeconds(6) : null,
         };
 
         return state;
     }
+
+    /// <summary>An unassisted window the bot has already passed on, so only patience is left.</summary>
+    private static GameState PassedOn(string botHand, string discard)
+    {
+        var state = Window(botHand, discard, assisted: false);
+        state.Pending!.Passed.Add(BotSeat);
+        return state;
+    }
+
+    private static int Patience => RuleOptions.Default.BotPatienceSeconds;
 
     [Fact]
     public void A_discard_it_holds_two_copies_of_is_punged()
@@ -56,9 +71,14 @@ public class SimpleBotTests
         // The replay case: R1 discarded, bot holding two, and it used to just wave it through.
         var state = Window("11r 123d 456b 99c 258d 3b", "1r");
 
-        var move = Assert.IsType<GameMove.Claim>(SimpleBot.Decide(state, BotSeat));
+        var move = Assert.IsType<GameMove.Claim>(SimpleBot.Decide(state, BotSeat, Now));
         Assert.Equal(ClaimKind.Pung, move.Kind);
-        Assert.Empty(move.TileIds);
+
+        // The tiles are named rather than left to the engine, because at an assist-off table an
+        // unnamed claim is only half an answer and would sit there until its clock ran out.
+        Assert.Equal(
+            state.Hands[BotSeat].Concealed.Where(t => t.Tile.Code == "R1").Select(t => t.Id).Order(),
+            move.TileIds.Order());
     }
 
     [Fact]
@@ -66,7 +86,7 @@ public class SimpleBotTests
     {
         var state = Window("111r 123d 456b 99c 258d", "1r");
 
-        var move = Assert.IsType<GameMove.Claim>(SimpleBot.Decide(state, BotSeat));
+        var move = Assert.IsType<GameMove.Claim>(SimpleBot.Decide(state, BotSeat, Now));
         Assert.Equal(ClaimKind.Kang, move.Kind);
     }
 
@@ -76,7 +96,7 @@ public class SimpleBotTests
         // Two copies of R1 in hand, so pung is on offer too. Todas has to outrank it.
         var state = Window("123d 456d 789d 456b 99c 11r", "1r");
 
-        var move = Assert.IsType<GameMove.Claim>(SimpleBot.Decide(state, BotSeat));
+        var move = Assert.IsType<GameMove.Claim>(SimpleBot.Decide(state, BotSeat, Now));
         Assert.Equal(ClaimKind.Todas, move.Kind);
     }
 
@@ -85,7 +105,7 @@ public class SimpleBotTests
     {
         var state = Window("123d 456b 99c 258d 13c 7b", "1r");
 
-        Assert.IsType<GameMove.Pass>(SimpleBot.Decide(state, BotSeat));
+        Assert.IsType<GameMove.Pass>(SimpleBot.Decide(state, BotSeat, Now));
     }
 
     [Fact]
@@ -94,7 +114,7 @@ public class SimpleBotTests
         // Two jokers would make a legal pung of R1, but they are worth more as wilds.
         var state = Window("11r 123d 456b 99c 258d 3b", "1r", joker: Tile.Parse("R1"));
 
-        Assert.IsType<GameMove.Pass>(SimpleBot.Decide(state, BotSeat));
+        Assert.IsType<GameMove.Pass>(SimpleBot.Decide(state, BotSeat, Now));
     }
 
     [Fact]
@@ -103,7 +123,7 @@ public class SimpleBotTests
         // Seat 2 sits immediately after seat 1, so the chow-from-the-left rule allows it.
         var state = Window("45b 19d 19c 234w 13r 7d", "3b");
 
-        var move = Assert.IsType<GameMove.Claim>(SimpleBot.Decide(state, BotSeat));
+        var move = Assert.IsType<GameMove.Claim>(SimpleBot.Decide(state, BotSeat, Now));
         Assert.Equal(ClaimKind.Chow, move.Kind);
     }
 
@@ -113,7 +133,7 @@ public class SimpleBotTests
         // The only run for B3 is B4-B5, and both are held twice.
         var state = Window("4455b 19d 19c 234w 1r", "3b");
 
-        Assert.IsType<GameMove.Pass>(SimpleBot.Decide(state, BotSeat));
+        Assert.IsType<GameMove.Pass>(SimpleBot.Decide(state, BotSeat, Now));
     }
 
     [Fact]
@@ -122,6 +142,71 @@ public class SimpleBotTests
         var state = Window("11r 123d 456b 99c 258d 3b", "1r");
         state.Pending!.Passed.Add(BotSeat);
 
-        Assert.Null(SimpleBot.Decide(state, BotSeat));
+        Assert.Null(SimpleBot.Decide(state, BotSeat, Now));
+    }
+
+    // ---------------------------------------------------------------- ending an unassisted window
+    //
+    // An unassisted claim window has no deadline: the only thing that ends one is the next seat
+    // drawing. That is fine between people, and fatal with a bot in that seat - a bot that has
+    // already passed has nothing else it will ever do, so one human who stops answering would
+    // freeze the table for good. It waits, then plays on.
+
+    [Fact]
+    public void It_draws_through_an_unassisted_window_it_has_waited_out()
+    {
+        var state = PassedOn("123d 456b 99c 258d 3b 7b", "1r");
+
+        Assert.IsType<GameMove.Draw>(SimpleBot.Decide(state, BotSeat, Now.AddSeconds(Patience)));
+    }
+
+    [Fact]
+    public void It_waits_its_full_patience_first()
+    {
+        var state = PassedOn("123d 456b 99c 258d 3b 7b", "1r");
+
+        Assert.Null(SimpleBot.Decide(state, BotSeat, Now.AddSeconds(Patience - 1)));
+    }
+
+    [Fact]
+    public void It_does_not_draw_through_somebody_still_naming_their_tiles()
+    {
+        var state = PassedOn("123d 456b 99c 258d 3b 7b", "1r");
+
+        // Seat 3 has pressed pung and is inside its ten seconds. That wait is already bounded, so
+        // drawing through it would make the clock decorative.
+        state.Pending!.Declared[3] = new DeclaredClaim(ClaimKind.Pung, [], AwaitingTiles: true);
+        state.Pending.NamingDeadline[3] = Now.AddSeconds(10);
+
+        Assert.Null(SimpleBot.Decide(state, BotSeat, Now.AddSeconds(Patience)));
+    }
+
+    [Fact]
+    public void It_never_draws_through_an_assisted_window()
+    {
+        // That one has a deadline of its own, and the ticker closes it.
+        var state = Window("123d 456b 99c 258d 3b 7b", "1r");
+        state.Pending!.Passed.Add(BotSeat);
+
+        Assert.Null(SimpleBot.Decide(state, BotSeat, Now.AddSeconds(Patience)));
+    }
+
+    [Fact]
+    public void Only_the_seat_due_to_play_next_ends_the_window()
+    {
+        var state = PassedOn("123d 456b 99c 258d 3b 7b", "1r");
+        state.Pending!.Passed.Add(3);
+
+        // Seat 3 sits two along from the discarder, so it is not the seat about to draw.
+        Assert.Null(SimpleBot.Decide(state, 3, Now.AddSeconds(Patience)));
+    }
+
+    [Fact]
+    public void It_answers_the_window_before_it_thinks_about_patience()
+    {
+        // Still holding a pung it wants, so the claim comes first however long it has been sitting.
+        var state = Window("11r 123d 456b 99c 258d 3b", "1r", assisted: false);
+
+        Assert.IsType<GameMove.Claim>(SimpleBot.Decide(state, BotSeat, Now.AddSeconds(Patience)));
     }
 }

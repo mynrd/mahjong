@@ -131,7 +131,7 @@ public class StateSnapshotTests
         {
             if (state.Phase == GamePhase.AwaitingDraw)
             {
-                MahjongGame.Draw(state, state.CurrentSeat);
+                MahjongGame.Draw(state, state.CurrentSeat, Now);
             }
             else
             {

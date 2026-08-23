@@ -180,7 +180,7 @@ public class GameFlowTests
 
         Assert.Equal(16, table.State.Hands[1].TileCount);
 
-        MahjongGame.Draw(table.State, 1);
+        MahjongGame.Draw(table.State, 1, Now);
 
         Assert.Equal(17, table.State.Hands[1].TileCount);
         Assert.Equal(GamePhase.AwaitingDiscard, table.State.Phase);
@@ -195,7 +195,7 @@ public class GameFlowTests
             currentSeat: 1,
             phase: GamePhase.AwaitingDraw);
 
-        var events = MahjongGame.Draw(table.State, 1);
+        var events = MahjongGame.Draw(table.State, 1, Now);
 
         Assert.Contains(events, e => e is BonusExposed);
         Assert.Single(table.State.Hands[1].Bonus);
@@ -480,7 +480,7 @@ public class GameFlowTests
 
         table.State.FrontIndex = table.State.BackIndex + 1;
 
-        var events = MahjongGame.Draw(table.State, 1);
+        var events = MahjongGame.Draw(table.State, 1, Now);
         var outcome = events.OfType<HandEnded>().Single().Outcome;
 
         Assert.Equal(HandEndReason.WallExhausted, outcome.Reason);
@@ -556,7 +556,7 @@ public class GameFlowTests
         switch (state.Phase)
         {
             case GamePhase.AwaitingDraw:
-                MahjongGame.Draw(state, state.CurrentSeat);
+                MahjongGame.Draw(state, state.CurrentSeat, Now);
                 break;
 
             case GamePhase.AwaitingDiscard:

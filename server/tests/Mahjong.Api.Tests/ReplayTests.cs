@@ -176,7 +176,7 @@ public class ReplayTests
         // Drive the wall dry rather than trying to force a win: the drawn ending is the one that
         // can be reached from any seed.
         state.FrontIndex = state.BackIndex + 1;
-        MahjongGame.Draw(state, state.CurrentSeat);
+        MahjongGame.Draw(state, state.CurrentSeat, Now);
 
         var frame = Frame(state, "wall out");
 
@@ -328,7 +328,7 @@ public class ReplayTests
         var state = PastTheOpeningDiscard();
         var seat = state.CurrentSeat;
 
-        var caption = ReplayCaption.For(Log(MahjongGame.Draw(state, seat)), Names);
+        var caption = ReplayCaption.For(Log(MahjongGame.Draw(state, seat, Now)), Names);
 
         Assert.Contains($"{Names[seat]} drew", caption);
     }

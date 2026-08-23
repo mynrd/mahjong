@@ -34,7 +34,8 @@ public sealed record TileDiscarded(TileRef Tile) : GameEvent;
 public sealed record ClaimWindowOpened(
     TileRef Tile,
     int FromSeat,
-    DateTimeOffset DeadlineUtc,
+    /// <summary>Null at an assist-off table, where the window has no deadline of its own.</summary>
+    DateTimeOffset? DeadlineUtc,
     IReadOnlyDictionary<int, IReadOnlyList<ClaimKind>> AllowedBySeat) : GameEvent;
 
 /// <summary>The claim window closed without anybody taking the tile.</summary>

@@ -72,20 +72,79 @@ public sealed class PlayerHand
 /// Empty when the seat did not name any tiles, in which case the server picks them itself when the
 /// window closes. Todas is always empty: the win is read off the whole hand.
 /// </param>
-public sealed record DeclaredClaim(ClaimKind Kind, IReadOnlyList<int> TileIds);
+/// <param name="AwaitingTiles">
+/// Assist off only: the seat has pressed the button but not yet said which tiles it costs, so the
+/// window cannot resolve yet. This has to be its own field rather than being read off an empty
+/// <paramref name="TileIds"/>, because empty already means the opposite - "you pick for me", what
+/// a bot sends, ready to resolve on the spot.
+/// </param>
+public sealed record DeclaredClaim(ClaimKind Kind, IReadOnlyList<int> TileIds, bool AwaitingTiles = false);
 
 /// <summary>The open claim window on a discard.</summary>
 public sealed class PendingClaim
 {
     public required TileRef Tile { get; init; }
     public required int FromSeat { get; init; }
-    public required DateTimeOffset DeadlineUtc { get; init; }
+
+    /// <summary>
+    /// When the tile was thrown. An assist-off window has no deadline to measure against, and a bot
+    /// sitting in the next seat still has to know how long it has been waiting.
+    /// </summary>
+    public required DateTimeOffset OpenedUtc { get; init; }
+
+    /// <summary>
+    /// When the window closes on its own. Null with assist off, where there is no deadline at all:
+    /// the discard stays claimable until every seat has answered or the next seat draws.
+    /// </summary>
+    public required DateTimeOffset? DeadlineUtc { get; init; }
 
     /// <summary>Seats that have said they do not want the tile.</summary>
     public HashSet<int> Passed { get; init; } = [];
 
+    /// <summary>
+    /// The subset of <see cref="Passed"/> the server passed for them, because they held nothing
+    /// that could take the tile. Tracked separately only so an assist-off table can keep showing
+    /// them the buttons: a strip that vanished the instant it appeared would be the server telling
+    /// them their hand was no good, which is the one thing assist off is meant not to do.
+    /// </summary>
+    public HashSet<int> AutoPassed { get; init; } = [];
+
     /// <summary>Claims declared so far, by seat.</summary>
     public Dictionary<int, DeclaredClaim> Declared { get; init; } = [];
+
+    /// <summary>
+    /// Assist off: when each seat that has pressed pung or kang runs out of time to name the tiles
+    /// it costs. Set once, on the press, and never moved - otherwise a seat could press pung, press
+    /// something else a second before the clock ran out, press pung again for a fresh ten seconds,
+    /// and hold the table open for as long as it liked.
+    /// </summary>
+    public Dictionary<int, DateTimeOffset> NamingDeadline { get; init; } = [];
+
+    /// <summary>
+    /// Seats that pressed pung or kang and let that clock run out. They are out of this discard for
+    /// good, which is what makes the clock mean anything: the tile can now reach whatever was
+    /// ranked under them.
+    /// </summary>
+    public HashSet<int> Burned { get; init; } = [];
+
+    /// <summary>
+    /// The next instant this window changes by itself. Null when nothing is on a clock, which is
+    /// the normal state of an assist-off window on a person's discard that nobody has pressed on.
+    /// </summary>
+    [JsonIgnore]
+    public DateTimeOffset? NextDeadline
+    {
+        get
+        {
+            // A naming clock outranks the window deadline: while anybody is still choosing tiles
+            // the window cannot close, so the soonest of those clocks is the only thing actually
+            // due. Reporting an already-passed window deadline instead would have the ticker wake
+            // up every 400ms for the whole ten seconds and find nothing to do.
+            if (NamingDeadline.Count > 0) return NamingDeadline.Values.Min();
+
+            return DeadlineUtc;
+        }
+    }
 }
 
 /// <summary>How the hand ended and what it cost.</summary>
@@ -109,6 +168,13 @@ public sealed class GameState
 
     /// <summary>Seat that deals and discards first.</summary>
     public required int ManoSeat { get; init; }
+
+    /// <summary>
+    /// Which seats are played by a bot. Filled in once, when the hand is dealt, from the room's
+    /// players. The rules need it in one place: an assist-off window on a bot's discard is the one
+    /// that gets a deadline, because there is nobody sitting behind that tile to prompt the table.
+    /// </summary>
+    public HashSet<int> BotSeats { get; init; } = [];
 
     /// <summary>Seed the wall was shuffled with, kept so a hand can be replayed exactly.</summary>
     public required int Seed { get; init; }

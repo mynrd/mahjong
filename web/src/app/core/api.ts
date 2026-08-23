@@ -31,7 +31,12 @@ export class Api {
   private readonly http = inject(HttpClient);
   private readonly base = apiBaseUrl();
 
-  createRoom(body: { name: string; password: string; displayName: string }): Promise<SeatedResponse> {
+  createRoom(body: {
+    name: string;
+    password: string;
+    displayName: string;
+    assistEnabled: boolean;
+  }): Promise<SeatedResponse> {
     return firstValueFrom(this.http.post<SeatedResponse>(`${this.base}/api/rooms`, body));
   }
 

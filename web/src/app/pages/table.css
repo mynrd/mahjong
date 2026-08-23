@@ -724,6 +724,44 @@
   border-color: var(--danger);
 }
 
+/* The four calls at an unassisted table. A row rather than the stacked .options list, because
+   there is nothing to draw beside each one: the server has not said what any of them would build,
+   which is the whole point of the setting. */
+.calls {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 7px;
+  margin: 10px 0;
+}
+
+.option.call {
+  justify-content: center;
+  padding: 12px 4px;
+}
+
+/* Said once the call is pressed, while the hand is being tapped. Reads as an instruction rather
+   than a label, so it gets the weight the option rows would have had. */
+.claim-naming {
+  margin: 10px 0;
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.claim-naming strong {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--gold);
+}
+
+/* No clock is running, so the slot keeps its place without pretending to count anything. */
+.countdown.quiet {
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
+}
+
 .claim-foot {
   display: flex;
   flex-wrap: wrap;

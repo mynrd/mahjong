@@ -84,6 +84,57 @@ A hand held by a player is always 16 tiles between turns, 17 at the moment of de
 5. If nobody claims, turn passes to the next seat. The discard becomes dead once the next
    player draws.
 
+Steps 4 and 5 change at a table with **Allow Helper** off. See section 3.1.
+
+### 3.1 Allow Helper **(configurable, default: on)**
+
+Chosen when the table is created and fixed for every hand played at it.
+
+**On.** The server works out what each seat could do with a discard and says so: the claim window
+arrives with the exact groups you could build, your own tiles are outlined by what they could be
+used for, and Auto Arrange lays your hand out in blocks.
+
+**Off.** The server says none of that. All three seats get the same four buttons on every discard,
+whether or not they can use it, and nobody is shown a grouping. Reading your own hand is the game.
+
+Because nobody is told what a discard is worth, nobody is timed for failing to spot it:
+
+- A discard from **another player** has **no deadline**. It stays open until every seat that can act
+  has answered.
+- The discard dies when the **next seat draws**, exactly as at a real table. That is the only thing
+  that ends a window nobody wanted, and it is a move that seat was going to make anyway.
+- A discard from a **bot** does get a deadline, **10 seconds** **(configurable)**. Around a real
+  table somebody says "your turn, taking it or not"; nobody says that when the tile came from a bot,
+  so that window is bounded instead. Answering closes it sooner: once every seat has pressed a call
+  or Pass, play moves on immediately rather than sitting out the rest of the ten seconds.
+- That deadline only bounds **noticing** the tile. A seat that presses pung or kang before it runs
+  out still gets its full 10 seconds to name the tiles, and the window waits for it.
+- Pressing a button is only half a claim. The other half is tapping the tiles it costs.
+- Pressing **Pung** or **Kang** starts a **10 second** clock **(configurable)** to name those tiles.
+  Miss it and the claim is dropped and the tile falls to whoever was ranked under it. **Chow** has
+  no clock, because nothing is ranked under a chow waiting to be let through.
+- **One press per seat per discard.** A pung or kang you let run out cannot be pressed again, and
+  you are out of that discard entirely. Without this a seat could press and lapse on a loop and hold
+  the table open forever. Declaring **todas** is the one exception, since it names no tiles and so
+  resolves on the spot.
+- The next seat cannot draw through a naming clock that is still running. The wait is at most those
+  10 seconds.
+
+Priority is unchanged and does not care who pressed first: a pung declared forty seconds late still
+beats a chow that was completed at second nine. See section 4.1.
+
+Bots claim the same way at both kinds of table: they work out the group and name its tiles in one
+move, so there is no press for them to leave half finished. What is different is the waiting. A bot
+sitting in the seat due to play next waits **20 seconds** **(configurable)** from the discard and
+then draws, ending the window. That covers the case the 10 seconds above does not: a *human* threw
+the tile, so there is no deadline, and one human who stopped answering would otherwise freeze the
+table for good, because a bot that has already passed has nothing else it will ever do. It does not
+draw through a naming clock that is still running.
+
+A human who walks away can still stall an unassisted table indefinitely, if the seat due to play
+next is theirs. That is accepted: a human who never discards already stalls any table, assisted or
+not, and the game has no turn clock.
+
 ---
 
 ## 4. Calls
@@ -179,3 +230,5 @@ Recorded so they are not mistaken for bugs. Each is a config flag, defaulted to 
    Default: left only.
 5. **Money values** - all three sources differ. Defaults above use "units", not pesos, and the
    room owner sets the unit value.
+6. **Allow Helper** - not a rules conflict but a table setting, since a physical table has no
+   helper at all. Default: on, because a first-time player cannot read a hand yet. See section 3.1.

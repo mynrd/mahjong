@@ -94,6 +94,15 @@ export class Game {
     return this.invoke('Pass');
   }
 
+  /**
+   * Draws on purpose, which is only ever a move at an unassisted table: the seat due to play next
+   * ending a claim window that has no deadline. The ordinary draw is <see cref="autoDraw"/> and
+   * needs no button, because when it is your turn there is exactly one thing you can do.
+   */
+  drawInstead(): Promise<boolean> {
+    return this.invoke('Draw');
+  }
+
   declareSecretKang(face: string): Promise<boolean> {
     return this.invoke('DeclareSecretKang', face);
   }

@@ -45,6 +45,8 @@ public static class RoomEndpoints
         // later config change does not move the goalposts under a table that is already running.
         var rules = request.Rules ?? ruleDefaults.Value;
 
+        if (request.AssistEnabled is { } assist) rules = rules with { AssistEnabled = assist };
+
         var room = new Room
         {
             Code = await UniqueCodeAsync(db, cancel),

@@ -142,7 +142,14 @@ export class TablePage implements OnDestroy {
    * Layout mode for your own hand. Sticky, because the one-shot alternative goes stale the moment
    * a tile is drawn and a stale grouping is worse than none.
    */
-  protected readonly arranged = signal(readFlag(ARRANGE_KEY, false));
+  private readonly arrangePreference = signal(readFlag(ARRANGE_KEY, false));
+
+  /**
+   * Whether the hand is actually being laid out for you. An unassisted table does not send the
+   * grouping at all, so the preference is kept but ignored there rather than cleared: turning the
+   * setting back on at the next table should not have cost you the toggle you had set.
+   */
+  protected readonly arranged = computed(() => this.assisted() && this.arrangePreference());
 
   /**
    * Whether your own box is lifted over the table to show every tile at once. Down by default: the
@@ -360,14 +367,37 @@ export class TablePage implements OnDestroy {
     return !!view && view.currentSeat === view.yourSeat && view.phase !== 'HandOver';
   });
 
-  /** Seconds left to answer a discard, floored at zero. */
-  protected readonly claimSeconds = computed(() => {
-    const claim = this.view()?.claim;
-    if (!claim) return 0;
+  /**
+   * Whether the server is helping at this table. Off, no claim is spelled out and no hand is laid
+   * out, so the claim strip is four bare buttons and Auto Arrange is gone.
+   */
+  protected readonly assisted = computed(() => this.view()?.assisted !== false);
 
-    const remaining = new Date(claim.deadlineUtc).getTime() - this.now();
-    return Math.max(0, Math.ceil(remaining / 1000));
+  /**
+   * The deadline the countdown is running against, or null when nothing is on a clock.
+   *
+   * At an assisted table that is the claim window. At an unassisted one the window has no deadline
+   * at all - nobody was told what the tile was good for, so nobody is being timed for spotting it -
+   * and the only clock is the ten seconds you get to name the tiles after pressing Pung or Kang.
+   */
+  private readonly liveDeadline = computed(() => {
+    const claim = this.view()?.claim;
+    if (!claim) return null;
+
+    const at = claim.namingDeadlineUtc ?? claim.deadlineUtc;
+    return at ? new Date(at).getTime() : null;
   });
+
+  /** Seconds left to answer a discard, floored at zero. Zero when nothing is on a clock. */
+  protected readonly claimSeconds = computed(() => {
+    const deadline = this.liveDeadline();
+    if (deadline === null) return 0;
+
+    return Math.max(0, Math.ceil((deadline - this.now()) / 1000));
+  });
+
+  /** Whether anything is actually counting down, so the template can leave the number out. */
+  protected readonly claimTimed = computed(() => this.liveDeadline() !== null);
 
   /**
    * How much of the claim window is left, 0 to 1, for the bar under the claim buttons.
@@ -378,9 +408,13 @@ export class TablePage implements OnDestroy {
    */
   protected readonly claimFraction = computed(() => {
     const claim = this.view()?.claim;
-    if (!claim) return 0;
+    if (!claim || !this.claimTimed()) return 0;
 
-    const window = Math.max(1, claim.windowSeconds || 0);
+    // Against whichever clock is actually running: the naming clock is a different length from the
+    // window, and a bar drawn against the wrong one empties at the wrong speed.
+    const seconds = claim.namingDeadlineUtc ? claim.namingSeconds : claim.windowSeconds;
+    const window = Math.max(1, seconds || 0);
+
     return Math.min(1, Math.max(0, this.claimSeconds() / window));
   });
 
@@ -427,12 +461,61 @@ export class TablePage implements OnDestroy {
     return match ?? null;
   });
 
+  // ---------------------------------------------------------------- claiming by hand
+  //
+  // With assist off the server says nothing about what the discard is worth, so the dialog cannot
+  // offer options. It offers the four calls instead, and pressing one is only half an answer: the
+  // second half is tapping the tiles it costs. Everything below is that second half.
+
+  /** The four calls, in the order they outrank each other. Only drawn when assist is off. */
+  protected readonly manualKinds: readonly ClaimKind[] = ['Chow', 'Pung', 'Kang', 'Todas'];
+
+  /** What you have pressed and still owe tiles for, or null. */
+  protected readonly pressedKind = computed<ClaimKind | null>(
+    () => this.pendingClaim()?.pressedKind ?? null,
+  );
+
+  /** How many of your own tiles each call costs. A todas names none: the win is the whole hand. */
+  private static readonly COST: Record<ClaimKind, number> = { Chow: 2, Pung: 2, Kang: 3, Todas: 0 };
+
+  /**
+   * Whether the tiles picked so far are the right number for the call that was pressed. That is as
+   * far as the client can check without being told what the hand can do, which is the whole point:
+   * whether they actually make the set is the server's answer to give, and a wrong guess comes back
+   * as an error rather than being greyed out in advance.
+   */
+  protected readonly pickReady = computed(() => {
+    const kind = this.pressedKind();
+    if (!kind) return false;
+
+    return this.claimPicks().length === TablePage.COST[kind];
+  });
+
+  /** Presses a call without naming any tiles. The dialog then waits for the tiles. */
+  protected pressCall(kind: ClaimKind): void {
+    // A todas costs nothing out of hand, so there is no second half and it resolves on the press.
+    void this.game.claim(kind, []);
+  }
+
+  /** Hands over the tiles for the call already pressed. */
+  protected confirmPress(): void {
+    const kind = this.pressedKind();
+    if (!kind || !this.pickReady()) return;
+
+    void this.game.claim(kind, this.claimPicks());
+  }
+
   /** Null when the picked tiles make a legal group, otherwise why they do not. */
   protected readonly pickError = computed<string | null>(() => {
     const claim = this.pendingClaim();
     const picked = this.claimPicks();
 
     if (!claim || picked.length === 0) return null;
+
+    // Nothing to say at an unassisted table: the client was not told what the hand can make, so it
+    // has no grounds to call a pick wrong. The server does that when the tiles are sent.
+    if (!this.assisted()) return null;
+
     if (this.pickMatch()) return null;
 
     const thrown = this.label(claim.tile.code);
@@ -674,6 +757,32 @@ export class TablePage implements OnDestroy {
 
   protected pass(): void {
     void this.game.pass();
+  }
+
+  /**
+   * Whether this seat can end the claim window by taking its turn.
+   *
+   * Only where nothing else would end it: an unassisted window on a human's discard, which has no
+   * deadline at all. A bot's discard carries one, so the game moves on by itself and the button
+   * would be clutter. Only the seat due to play next, which is who picks up if the tile goes dead.
+   */
+  protected readonly canDrawThrough = computed(() => {
+    const view = this.view();
+    if (!view || this.assisted() || !view.claim) return false;
+
+    // Something is already counting down towards closing this window.
+    if (view.claim.deadlineUtc) return false;
+
+    // Drawing gives up whatever you have called, so it is not offered to somebody who has called
+    // something. Pass first if you have changed your mind.
+    if (view.claim.youClaimed) return false;
+
+    return (view.currentSeat + 1) % 4 === view.yourSeat;
+  });
+
+  /** Gives up on the discard and takes a tile off the wall, which kills the window. */
+  protected drawInstead(): void {
+    void this.game.drawInstead();
   }
 
   protected secretKang(face: string): void {
@@ -955,8 +1064,8 @@ export class TablePage implements OnDestroy {
   }
 
   protected toggleArrange(): void {
-    const next = !this.arranged();
-    this.arranged.set(next);
+    const next = !this.arrangePreference();
+    this.arrangePreference.set(next);
     writeFlag(ARRANGE_KEY, next);
 
     // The server is laying the hand out now, so a tile half-picked up for grouping has nothing

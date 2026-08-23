@@ -66,13 +66,25 @@ export interface ClaimCandidateView {
 export interface ClaimPromptView {
   tile: TileView;
   fromSeat: number;
-  deadlineUtc: string;
+  /** Null at an unassisted table, where the window has no deadline. */
+  deadlineUtc: string | null;
   /** How long the window was when it opened. The countdown bar needs this to know how full to be. */
   windowSeconds: number;
+  /** Empty at an unassisted table: working out what you can take is your job there. */
   yourOptions: ClaimKind[];
-  /** One entry per distinct legal group. Highest-ranked kind first. */
+  /** One entry per distinct legal group. Highest-ranked kind first. Empty when unassisted. */
   candidates: ClaimCandidateView[];
   youAnswered: boolean;
+  /** Unassisted: what you pressed and still owe the tiles for. */
+  pressedKind: ClaimKind | null;
+  /** When that press is dropped for taking too long. Set for a pung or kang, null for a chow. */
+  namingDeadlineUtc: string | null;
+  /** How long that clock was when it started, for the countdown bar. */
+  namingSeconds: number;
+  /** You pressed pung or kang and never named the tiles in time. Out of this discard. */
+  burned: boolean;
+  /** You have a claim on this tile, finished or half made. Unlike youAnswered, a pass is not one. */
+  youClaimed: boolean;
 }
 
 export interface TurnOptionsView {
@@ -115,6 +127,11 @@ export interface PlayerGameView {
   claim: ClaimPromptView | null;
   yourTurn: TurnOptionsView | null;
   outcome: OutcomeView | null;
+  /**
+   * Whether this table lets the server help. Off, no claim is spelled out and no hand is laid out
+   * for you: the claim strip is four bare buttons and Auto Arrange is gone.
+   */
+  assisted: boolean;
 }
 
 export interface SeatView {
