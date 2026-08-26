@@ -94,9 +94,9 @@ public class AssistOffViewTests
     {
         var table = Window();
 
-        // Seat 2 holds nothing that takes it. The server has already passed for it so the window
-        // does not wait, but the prompt still arrives and still reads as unanswered, so the buttons
-        // stay on screen and seat 2 learns nothing from their absence.
+        // Seat 2 holds nothing that takes it, and is told none of that: the prompt arrives and reads
+        // as unanswered, exactly as it does for the two seats that could act. Seat 2 learns nothing
+        // from it, which is the point, and the window waits for its answer like anybody else's.
         var claim = table.ClaimFor(2);
 
         Assert.NotNull(claim);
@@ -124,6 +124,37 @@ public class AssistOffViewTests
         Assert.Null(Window().ClaimFor(1)!.DeadlineUtc);
     }
 
+    [Fact]
+    public void Only_the_seat_on_the_discarders_left_is_told_a_chow_is_open_at_all()
+    {
+        var table = Window();
+
+        // The one thing an unassisted table does say about a claim, because it is not about anyone's
+        // hand: everybody can see the tile and who threw it. It is what keeps a Chow button off the
+        // three screens where pressing it could only ever be refused.
+        Assert.True(table.ClaimFor(1)!.ChowPossible);
+        Assert.False(table.ClaimFor(2)!.ChowPossible);
+        Assert.False(table.ClaimFor(3)!.ChowPossible);
+    }
+
+    [Fact]
+    public void A_seat_that_took_its_call_back_is_shown_the_calls_again()
+    {
+        var table = Window();
+
+        MahjongGame.Claim(table.State, 3, ClaimKind.Pung, [], Now);
+        MahjongGame.Withdraw(table.State, 3);
+
+        var claim = table.ClaimFor(3)!;
+
+        // Nothing pressed and still owing the discard an answer: the dialog is back to the four
+        // calls it opened with.
+        Assert.Null(claim.PressedKind);
+        Assert.Null(claim.DeadlineUtc);
+        Assert.False(claim.YouAnswered);
+        Assert.False(claim.YouClaimed);
+    }
+
     // ---------------------------------------------------------------- a press in progress
 
     [Fact]
@@ -137,8 +168,10 @@ public class AssistOffViewTests
         // It has to stay unanswered or the dialog closes over the half of the answer it still owes.
         Assert.False(claim.YouAnswered);
         Assert.Equal(ClaimKind.Pung, claim.PressedKind);
-        Assert.Equal(Now.AddSeconds(Manual.ClaimFulfilSeconds), claim.NamingDeadlineUtc);
-        Assert.Equal(Manual.ClaimFulfilSeconds, claim.NamingSeconds);
+
+        // And nothing is counting against it. The dialog used to show ten seconds here and take
+        // the discard away at the end of them.
+        Assert.Null(claim.DeadlineUtc);
     }
 
     [Fact]
@@ -150,11 +183,10 @@ public class AssistOffViewTests
         var claim = table.ClaimFor(1)!;
 
         Assert.Null(claim.PressedKind);
-        Assert.Null(claim.NamingDeadlineUtc);
     }
 
     [Fact]
-    public void A_chow_press_carries_no_naming_deadline()
+    public void A_chow_press_carries_no_deadline_either()
     {
         var table = Window();
         MahjongGame.Claim(table.State, 1, ClaimKind.Chow, [], Now);
@@ -162,7 +194,7 @@ public class AssistOffViewTests
         var claim = table.ClaimFor(1)!;
 
         Assert.Equal(ClaimKind.Chow, claim.PressedKind);
-        Assert.Null(claim.NamingDeadlineUtc);
+        Assert.Null(claim.DeadlineUtc);
     }
 
     [Fact]
@@ -183,17 +215,19 @@ public class AssistOffViewTests
     }
 
     [Fact]
-    public void A_seat_whose_clock_ran_out_is_told_it_is_out()
+    public void A_finished_call_is_what_puts_a_deadline_on_the_prompt()
     {
         var table = Window();
+
+        // Seat 1 presses and never finishes, so there is still a window to look at.
         MahjongGame.Claim(table.State, 1, ClaimKind.Chow, [], Now);
-        MahjongGame.Claim(table.State, 3, ClaimKind.Pung, [], Now);
-        MahjongGame.ExpireClaimWindow(table.State, Now.AddSeconds(10));
+        Assert.Null(table.ClaimFor(1)!.DeadlineUtc);
 
-        var claim = table.ClaimFor(3)!;
+        MahjongGame.Claim(table.State, 3, ClaimKind.Pung, table.PungTiles, Now.AddSeconds(20));
 
-        Assert.True(claim.Burned);
-        Assert.True(claim.YouAnswered);
+        // Now the whole table is on a clock, and it is the one thing a clock still means here:
+        // how long there is to call over a call that has been made.
+        Assert.Equal(Now.AddSeconds(20 + Manual.ClaimWindowSeconds), table.ClaimFor(1)!.DeadlineUtc);
     }
 
     [Fact]
@@ -233,9 +267,16 @@ public class AssistOffViewTests
         Assert.True(view.Assisted);
         Assert.NotNull(view.Seats[3].Groups);
         Assert.Equal(ClaimKind.Pung, Assert.Single(view.Claim!.Candidates).Kind);
-        Assert.Equal(Now.AddSeconds(Assisted.ClaimWindowSeconds), view.Claim.DeadlineUtc);
 
-        // And a seat holding nothing is still not shown a window it cannot use.
-        Assert.Null(table.ClaimFor(2));
+        // Nothing has been called on the tile, so nothing is timing it at either kind of table.
+        Assert.Null(view.Claim.DeadlineUtc);
+
+        // A seat holding nothing gets the prompt too - it is how the tile is put in front of it -
+        // but with nothing spelled out on it, because there is nothing it could do with the tile.
+        var nothing = table.ClaimFor(2);
+
+        Assert.NotNull(nothing);
+        Assert.Empty(nothing!.Candidates);
+        Assert.False(nothing.YouAnswered);
     }
 }

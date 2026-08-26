@@ -24,6 +24,22 @@ public class ClaimCandidateTests
     private static string[] Faces(ClaimCandidate candidate) =>
         candidate.Support.Select(t => t.Tile.Code).ToArray();
 
+    /// <summary>
+    /// Says no for every seat that is neither the thrower nor the one claiming, and hands back the
+    /// events of the last of them. A window waits for all three seats however plainly the tile is
+    /// already spoken for, so this is what makes a claim actually resolve.
+    /// </summary>
+    private static List<GameEvent> PassRest(TestTable table, int claimant)
+    {
+        var events = new List<GameEvent>();
+
+        for (var seat = 1; seat < 4; seat++)
+            if (seat != claimant)
+                events = MahjongGame.Pass(table.State, seat, Now);
+
+        return events;
+    }
+
     // ---------------------------------------------------------------- what comes back
 
     [Fact]
@@ -177,8 +193,8 @@ public class ClaimCandidateTests
         MahjongGame.Discard(table.State, 0, table.HeldId(0, Contested), Now);
 
         // 5-6-7, the highest of the three runs on offer.
-        var events = MahjongGame.Claim(
-            table.State, 1, ClaimKind.Chow, [table.HeldId(1, "B6"), table.HeldId(1, "B7")], Now);
+        MahjongGame.Claim(table.State, 1, ClaimKind.Chow, [table.HeldId(1, "B6"), table.HeldId(1, "B7")], Now);
+        var events = PassRest(table, claimant: 1);
 
         var meld = events.OfType<MeldFormed>().Single();
 
@@ -231,7 +247,8 @@ public class ClaimCandidateTests
 
         MahjongGame.Discard(table.State, 0, table.HeldId(0, Contested), Now);
 
-        var events = MahjongGame.Claim(table.State, 1, ClaimKind.Chow, [], Now);
+        MahjongGame.Claim(table.State, 1, ClaimKind.Chow, [], Now);
+        var events = PassRest(table, claimant: 1);
         var meld = events.OfType<MeldFormed>().Single();
 
         // Unchanged behaviour: the lowest run.
@@ -257,7 +274,8 @@ public class ClaimCandidateTests
             .Select(t => t.Id)
             .ToList();
 
-        var events = MahjongGame.Claim(table.State, 3, ClaimKind.Pung, picked, Now);
+        MahjongGame.Claim(table.State, 3, ClaimKind.Pung, picked, Now);
+        var events = PassRest(table, claimant: 3);
         var meld = events.OfType<MeldFormed>().Single();
 
         Assert.Equal(SetKind.Pung, meld.Meld.Kind);

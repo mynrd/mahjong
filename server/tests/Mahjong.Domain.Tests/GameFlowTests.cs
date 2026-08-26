@@ -154,7 +154,7 @@ public class GameFlowTests
     }
 
     [Fact]
-    public void A_discard_nobody_can_use_passes_the_turn_straight_on()
+    public void A_discard_nobody_can_use_still_opens_a_window_for_the_table_to_answer()
     {
         var table = TestTable.Build(t => t
             .Hand(0, "9d").Filler(0, 16, "D9")
@@ -164,8 +164,44 @@ public class GameFlowTests
 
         var events = MahjongGame.Discard(table.State, 0, table.HeldId(0, "D9"), Now);
 
+        // Every discard opens one now, whether or not anything can be done with it: the window
+        // opening is what puts the tile in front of the other three, and one that only opened when
+        // somebody could claim would be announcing that somebody could.
         Assert.Contains(events, e => e is TileDiscarded);
-        Assert.DoesNotContain(events, e => e is ClaimWindowOpened);
+        Assert.Contains(events, e => e is ClaimWindowOpened);
+        Assert.Equal(GamePhase.AwaitingClaims, table.State.Phase);
+
+        // It is people at all three seats here, so nothing has been answered for them.
+        Assert.Empty(table.State.Pending!.Passed);
+
+        // And nothing times them out of it either: the tile is still there half an hour later.
+        Assert.Empty(MahjongGame.ExpireClaimWindow(table.State, Now.AddMinutes(30)));
+        Assert.Equal(GamePhase.AwaitingClaims, table.State.Phase);
+
+        MahjongGame.Pass(table.State, 1, Now.AddMinutes(30));
+        MahjongGame.Pass(table.State, 2, Now.AddMinutes(30));
+        MahjongGame.Pass(table.State, 3, Now.AddMinutes(30));
+
+        Assert.Equal(1, table.State.CurrentSeat);
+        Assert.Equal(GamePhase.AwaitingDraw, table.State.Phase);
+    }
+
+    [Fact]
+    public void A_discard_three_bots_can_do_nothing_with_moves_on_inside_the_same_move()
+    {
+        var table = TestTable.Build(t => t
+            .Hand(0, "9d").Filler(0, 16, "D9")
+            .Filler(1, 16, "D9")
+            .Filler(2, 16, "D9")
+            .Filler(3, 16, "D9"));
+
+        for (var bot = 1; bot < 4; bot++) table.State.BotSeats.Add(bot);
+
+        var events = MahjongGame.Discard(table.State, 0, table.HeldId(0, "D9"), Now);
+
+        // Nobody is looking at this tile, so there is nothing to wait for and no reason to spend
+        // three ticks of the game clock on three bots saying no.
+        Assert.Contains(events, e => e is ClaimWindowClosed);
         Assert.Equal(1, table.State.CurrentSeat);
         Assert.Equal(GamePhase.AwaitingDraw, table.State.Phase);
     }
@@ -249,7 +285,8 @@ public class GameFlowTests
         MahjongGame.Discard(table.State, 0, table.HeldId(0, Contested), Now);
 
         MahjongGame.Claim(table.State, 1, ClaimKind.Chow, [table.HeldId(1, "C4"), table.HeldId(1, "C6")], Now);
-        var events = MahjongGame.Claim(table.State, 3, ClaimKind.Pung, [], Now);
+        MahjongGame.Claim(table.State, 3, ClaimKind.Pung, [], Now);
+        var events = MahjongGame.Pass(table.State, 2, Now);
 
         var meld = events.OfType<MeldFormed>().Single();
         Assert.Equal(3, meld.Seat);
@@ -271,7 +308,8 @@ public class GameFlowTests
         MahjongGame.Discard(table.State, 0, table.HeldId(0, Contested), Now);
 
         MahjongGame.Claim(table.State, 1, ClaimKind.Pung, [], Now);
-        var events = MahjongGame.Claim(table.State, 2, ClaimKind.Todas, [], Now);
+        MahjongGame.Claim(table.State, 2, ClaimKind.Todas, [], Now);
+        var events = MahjongGame.Pass(table.State, 3, Now);
 
         var ended = events.OfType<HandEnded>().Single();
         Assert.Equal(HandEndReason.Todas, ended.Outcome.Reason);
@@ -295,7 +333,8 @@ public class GameFlowTests
         MahjongGame.Discard(table.State, 0, table.HeldId(0, Contested), Now);
 
         MahjongGame.Claim(table.State, 3, ClaimKind.Chow, [table.HeldId(3, "C4"), table.HeldId(3, "C6")], Now);
-        var events = MahjongGame.Claim(table.State, 2, ClaimKind.Chow, [table.HeldId(2, "C4"), table.HeldId(2, "C6")], Now);
+        MahjongGame.Claim(table.State, 2, ClaimKind.Chow, [table.HeldId(2, "C4"), table.HeldId(2, "C6")], Now);
+        var events = MahjongGame.Pass(table.State, 1, Now);
 
         Assert.Equal(2, events.OfType<MeldFormed>().Single().Seat);
     }
@@ -323,6 +362,7 @@ public class GameFlowTests
 
         MahjongGame.Discard(table.State, 0, table.HeldId(0, Contested), Now);
         MahjongGame.Pass(table.State, 1, Now);
+        MahjongGame.Pass(table.State, 2, Now);
         var events = MahjongGame.Pass(table.State, 3, Now);
 
         Assert.Contains(events, e => e is ClaimWindowClosed);
@@ -332,7 +372,7 @@ public class GameFlowTests
     }
 
     [Fact]
-    public void An_expired_claim_window_is_read_as_everyone_passing()
+    public void The_next_seat_drawing_is_what_reads_the_rest_of_the_table_as_passing()
     {
         var table = TestTable.Build(t => t
             .Hand(1, "46c").Filler(1, 14, Contested)
@@ -341,10 +381,15 @@ public class GameFlowTests
         MahjongGame.Discard(table.State, 0, table.HeldId(0, Contested), Now);
         Assert.Equal(GamePhase.AwaitingClaims, table.State.Phase);
 
-        MahjongGame.ExpireClaimWindow(table.State, Now.AddSeconds(30));
+        // Time used to do this after six seconds. It does not any more: seat 1 could have chowed
+        // that tile, and it is still there for it until seat 1 itself decides to pick up instead.
+        Assert.Empty(MahjongGame.ExpireClaimWindow(table.State, Now.AddSeconds(30)));
+
+        MahjongGame.Draw(table.State, 1, Now.AddSeconds(30));
 
         Assert.Equal(1, table.State.CurrentSeat);
-        Assert.Equal(GamePhase.AwaitingDraw, table.State.Phase);
+        Assert.Equal(GamePhase.AwaitingDiscard, table.State.Phase);
+        Assert.False(table.State.Discards[^1].Claimed);
     }
 
     [Fact]
@@ -358,6 +403,11 @@ public class GameFlowTests
 
         MahjongGame.Discard(table.State, 0, table.HeldId(0, Contested), Now);
         MahjongGame.Claim(table.State, 3, ClaimKind.Pung, [], Now);
+
+        // Nothing moves until every seat has answered, whatever it is holding, because a pung is
+        // not the highest thing that could still be called on the tile.
+        MahjongGame.Pass(table.State, 1, Now);
+        MahjongGame.Pass(table.State, 2, Now);
 
         // Seats 1 and 2 never get a turn.
         Assert.Equal(3, table.State.CurrentSeat);
@@ -377,7 +427,9 @@ public class GameFlowTests
             .Hand(0, "5c").Filler(0, 16, Contested));
 
         MahjongGame.Discard(table.State, 0, table.HeldId(0, Contested), Now);
-        var events = MahjongGame.Claim(table.State, 3, ClaimKind.Kang, [], Now);
+        MahjongGame.Claim(table.State, 3, ClaimKind.Kang, [], Now);
+        MahjongGame.Pass(table.State, 1, Now);
+        var events = MahjongGame.Pass(table.State, 2, Now);
 
         var ambition = events.OfType<AmbitionEarned>().Single();
         Assert.Equal(Ambition.Kang, ambition.Ambition);
@@ -565,7 +617,9 @@ public class GameFlowTests
                 break;
 
             case GamePhase.AwaitingClaims:
-                MahjongGame.ExpireClaimWindow(state, Now.AddMinutes(1));
+                // Nothing times a window out any more, so the way past one is the way it is at a
+                // real table: the seat due to play next picks up and the discard is dead.
+                MahjongGame.Draw(state, GameState.NextSeat(state.CurrentSeat), Now);
                 break;
         }
     }

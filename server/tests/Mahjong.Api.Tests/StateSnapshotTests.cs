@@ -152,6 +152,27 @@ public class StateSnapshotTests
     }
 
     [Fact]
+    public void A_claim_window_with_no_deadline_survives_a_round_trip()
+    {
+        // The serialiser leaves nulls out, and DeadlineUtc is `required`, so a window nothing is
+        // timing wrote a snapshot that would not read back at all: the whole hand failed to load
+        // with "missing required properties". Every discard a bot makes has one, so this took out
+        // reconnecting mid-hand and every replay of a hand played against bots.
+        var (state, _) = MahjongGame.Deal(RuleOptions.Default with { JokerEnabled = false }, 1, 0, seed: 5, Now);
+
+        state.BotSeats.Add(0);
+        MahjongGame.Discard(state, 0, state.Hands[0].Concealed[0].Id, Now);
+
+        Assert.Null(state.Pending!.DeadlineUtc);
+
+        var restored = RoundTrip(state);
+
+        Assert.NotNull(restored.Pending);
+        Assert.Null(restored.Pending!.DeadlineUtc);
+        Assert.Equal(state.Pending.Tile.Id, restored.Pending.Tile.Id);
+    }
+
+    [Fact]
     public void A_finished_hand_keeps_its_score_breakdown_through_a_round_trip()
     {
         var (state, _) = MahjongGame.Deal(RuleOptions.Default with { JokerEnabled = false }, 1, 0, seed: 11, Now);

@@ -91,7 +91,11 @@ test.describe('auto arrange', () => {
 
     // A joker sitting inside a group keeps its own face, so it is taken out before the shape of
     // the group is checked - otherwise a pung completed by a joker looks like two different faces.
-    const joker = await host.page.getByTestId('joker').locator('.tile').getAttribute('data-code');
+    // There may not be one: the joker rule is a house rule and this server's default has it off,
+    // in which case nothing needs excluding.
+    const chip = host.page.getByTestId('joker');
+    const joker =
+      (await chip.count()) > 0 ? await chip.locator('.tile').getAttribute('data-code') : null;
 
     const blocks = host.page.getByTestId('my-hand').locator('.group');
 
@@ -188,6 +192,7 @@ test.describe('auto arrange', () => {
 
     await target.click();
     await target.click();
+    await host.page.getByTestId('discard-go').click();
 
     await expect(tiles).toHaveCount(16);
     expect(await handIds(host.page)).not.toContain(thrown);

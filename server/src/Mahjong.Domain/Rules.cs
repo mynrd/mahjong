@@ -129,47 +129,38 @@ public sealed record RuleOptions
     /// <summary>Whether a todas declaration outranks a pung or kang on the same discard.</summary>
     public bool TodasBeatsPungAndKang { get; init; } = true;
 
-    /// <summary>How long other players get to claim a discard before play moves on.</summary>
+    /// <summary>
+    /// How long a call that has been made out loud waits for a better one before it takes the tile.
+    ///
+    /// This is not a clock on answering a discard. Nobody is timed for spotting what a tile is
+    /// worth: the window opens with no deadline at all, and the discard stays claimable until it is
+    /// taken or the next seat draws. The clock starts only when somebody actually calls, and it is
+    /// the beat the rest of the table has to call over them - which at a real table is the moment
+    /// between one shout and the tiles going down.
+    /// </summary>
     public int ClaimWindowSeconds { get; init; } = 6;
 
     /// <summary>
     /// Whether the server tells a player what they could do. On, the claim window arrives with the
     /// exact groups the seat could make and the hand is laid out by Auto Arrange. Off, the seat
     /// gets four bare buttons and has to know its own hand, which is how the game is played on a
-    /// real table. Off also changes the timing: see <see cref="ClaimFulfilSeconds"/>.
+    /// real table.
     /// </summary>
     public bool AssistEnabled { get; init; } = true;
 
     /// <summary>
-    /// With assist off there is no window deadline: a seat may declare whenever it finally
-    /// notices, and the discard only dies when the next seat draws. What is on a clock is naming
-    /// the tiles, and only for the two claims that outrank a chow. Press Pung or Kang and you have
-    /// this long to tap the tiles it costs, after which the claim is dropped and the tile falls to
-    /// whoever is next in priority. One press per seat per discard: a dropped claim cannot be
-    /// re-declared, or a seat could hold the table open forever.
-    /// </summary>
-    public int ClaimFulfilSeconds { get; init; } = 10;
-
-    /// <summary>
-    /// Assist off: how long the window on a bot's discard stays open.
+    /// How long a bot sitting in the seat due to play next leaves a discard on the table before it
+    /// picks up and kills it.
     ///
-    /// A human's discard has no deadline, because the people at the table can prompt each other:
-    /// somebody says "your turn, taking it or not". Nobody says that when the tile came from a bot,
-    /// so that window gets a clock instead. It only bounds noticing the tile. A seat that presses
-    /// pung or kang in time keeps its full <see cref="ClaimFulfilSeconds"/> to name the tiles even
-    /// once this has run out.
-    /// </summary>
-    public int BotDiscardWindowSeconds { get; init; } = 10;
-
-    /// <summary>
-    /// Assist off: how long a bot sitting in the seat due to play next waits before drawing and
-    /// killing the discard.
+    /// No window closes on a clock any more: a discard is answered when the other three seats say
+    /// so, and dies when the next seat draws. When that seat is a person, taking as long as they
+    /// like is the point. When it is a bot, the same rule would freeze the table the moment one
+    /// human stopped answering, because a bot that has already passed has nothing else it will ever
+    /// do. So it waits this long and then plays on, which is what the person it stands in for would
+    /// have done.
     ///
-    /// An assist-off window is ended by the next seat drawing, and nothing else. When that seat is
-    /// a human, taking as long as they like is the point. When it is a bot, the same rule would
-    /// freeze the table forever the moment one human stopped answering, because a bot that has
-    /// already passed has nothing else it will ever do. So it waits this long and then plays on,
-    /// which is what the person it is standing in for would have done.
+    /// This is therefore the only thing pacing a window nobody answers, and the one number that
+    /// says how long a table with a bot in it will sit on a thrown tile.
     /// </summary>
     public int BotPatienceSeconds { get; init; } = 20;
 

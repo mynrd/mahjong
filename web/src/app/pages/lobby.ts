@@ -4,7 +4,7 @@ import QRCode from 'qrcode';
 import { Api, apiBaseUrl } from '../core/api';
 import { RoomView } from '../core/models';
 import { Session } from '../core/session';
-import { readError } from './create';
+import { readError } from '../core/errors';
 
 @Component({
   selector: 'mj-lobby',

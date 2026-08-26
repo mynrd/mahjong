@@ -4,7 +4,7 @@ export const routes: Routes = [
   {
     path: '',
     title: 'Mahjong',
-    loadComponent: () => import('./pages/create').then((m) => m.CreatePage),
+    loadComponent: () => import('./pages/home').then((m) => m.HomePage),
   },
   {
     // Where an invite link lands. The room code is bound straight into the component input.

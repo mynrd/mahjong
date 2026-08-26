@@ -5,8 +5,9 @@ using Microsoft.EntityFrameworkCore;
 namespace Mahjong.Api;
 
 /// <summary>
-/// The clock of the game. Two things have to happen without any player asking for them: a claim
-/// window has to close when its time runs out, and a bot has to take its turn.
+/// The clock of the game. Two things have to happen without any player asking for them: a call
+/// standing on a discard has to take the tile once the beat for calling over it has run out, and a
+/// bot has to take its turn.
 ///
 /// Both are done from one loop rather than from per-window timers. A timer scheduled when a
 /// discard happens is lost if the process restarts, leaving a hand wedged open forever; a loop
@@ -18,7 +19,7 @@ public sealed class GameTicker(
     TimeProvider clock,
     ILogger<GameTicker> logger) : BackgroundService
 {
-    /// <summary>How often the loop runs. Fine-grained enough for a six-second claim window.</summary>
+    /// <summary>How often the loop runs. Fine-grained enough for a six-second call beat.</summary>
     private static readonly TimeSpan Interval = TimeSpan.FromMilliseconds(400);
 
     /// <summary>
@@ -59,9 +60,11 @@ public sealed class GameTicker(
             using var scope = scopes.CreateScope();
             var games = scope.ServiceProvider.GetRequiredService<GameService>();
             await games.ExpireClaimsAsync(session, cancel);
-            return;
         }
 
+        // Falls through rather than returning, because a due deadline is not always one that
+        // resolves: a call still being paid for outlives it. Returning there would leave the
+        // deadline sitting due for as long as that took, and every bot at the table unticked.
         await TickBotsAsync(session, now, cancel);
     }
 

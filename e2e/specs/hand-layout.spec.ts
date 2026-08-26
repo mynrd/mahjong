@@ -1,4 +1,4 @@
-import { Page, expect, test } from '@playwright/test';
+import { Locator, Page, expect, test } from '@playwright/test';
 import { closeAll, createRoom, dealPlayable, fillWithBots, handSize, joinRoom } from './helpers';
 
 /**
@@ -31,19 +31,36 @@ async function spill(page: Page): Promise<{ sideways: number; down: number }> {
   });
 }
 
-/** Drags one tile onto another, which is what puts them in the same group. */
-async function dragTile(page: Page, fromId: string, ontoId: string): Promise<void> {
+/**
+ * Drags one tile into the gap on one side of another, which is what puts them in the same group.
+ * The side is the half of the target the drop lands on, so `before` aims a quarter of the way in
+ * from its leading edge and `after` a quarter in from the trailing one.
+ */
+async function dragTile(
+  page: Page,
+  fromId: string,
+  ontoId: string,
+  side: 'before' | 'after' = 'after',
+): Promise<void> {
   const hand = page.getByTestId('my-hand');
   const from = (await hand.locator(`.tile-button[data-tile-id="${fromId}"]`).boundingBox())!;
   const onto = (await hand.locator(`.tile-button[data-tile-id="${ontoId}"]`).boundingBox())!;
+  const x = onto.x + onto.width * (side === 'before' ? 0.25 : 0.75);
 
   await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
   await page.mouse.down();
 
   // Two moves: the first arms the drag past the threshold, the second lands it on the target.
   await page.mouse.move(from.x + from.width / 2, from.y - 24, { steps: 4 });
-  await page.mouse.move(onto.x + onto.width / 2, onto.y + onto.height / 2, { steps: 10 });
+  await page.mouse.move(x, onto.y + onto.height / 2, { steps: 10 });
   await page.mouse.up();
+}
+
+/** The tiles of a block, left to right, as ids - the order the group is actually held in. */
+function blockIds(block: Locator): Promise<(string | null)[]> {
+  return block.locator('.tile-button').evaluateAll((nodes) =>
+    nodes.map((n) => n.getAttribute('data-tile-id')),
+  );
 }
 
 test.describe('your own hand', () => {
@@ -146,6 +163,51 @@ test.describe('your own hand', () => {
     await closeAll([host]);
   });
 
+  test('a tile lands in the gap it was dropped in, not on the end of the group', async ({
+    browser,
+  }) => {
+    const { host } = await createRoom(browser);
+    await fillWithBots(host);
+    await dealPlayable(host, [host]);
+
+    const page = host.page;
+    const hand = page.getByTestId('my-hand');
+    const tiles = hand.locator('.tile-button');
+
+    await page.getByTestId('toggle-hand').click();
+
+    // Read up front and held as ids: grouping moves tiles around the hand, so a position is only
+    // good until the next drop while an id is the same tile all the way through.
+    const [first, second, third, fourth] = (await blockIds(hand)).slice(0, 4);
+
+    // A run of three, built left to right.
+    await dragTile(page, second!, first!);
+    await dragTile(page, third!, second!);
+
+    const group = hand.locator('.group[data-group="manual"]');
+    await expect(group.locator('.tile-button')).toHaveCount(3);
+    await expect.poll(() => blockIds(group)).toEqual([first, second, third]);
+
+    // The point of the whole thing: dropped on the leading half of the second tile, the fourth
+    // goes between the first two rather than onto the end.
+    await dragTile(page, fourth!, second!, 'before');
+    await expect.poll(() => blockIds(group)).toEqual([first, fourth, second, third]);
+
+    // And the front of the group is reachable the same way - there is a gap before the first tile.
+    await dragTile(page, fourth!, first!, 'before');
+    await expect.poll(() => blockIds(group)).toEqual([fourth, first, second, third]);
+
+    // The trailing half of the last tile is the other end of it.
+    await dragTile(page, fourth!, third!, 'after');
+    await expect.poll(() => blockIds(group)).toEqual([first, second, third, fourth]);
+
+    // Four tiles moved about, four tiles still in the group, and the hand is whole.
+    await expect(group.locator('.tile-button')).toHaveCount(4);
+    await expect(tiles).toHaveCount(17);
+
+    await closeAll([host]);
+  });
+
   test('dragging a tile into the middle throws it', async ({ browser }) => {
     const { host } = await createRoom(browser);
     await fillWithBots(host);
@@ -236,7 +298,7 @@ test.describe('your own hand', () => {
     await closeAll([host, guest]);
   });
 
-  test('a tile still throws with one tap and a second while the hand is lifted', async ({ browser }) => {
+  test('a tile still goes up with one tap and a second while the hand is lifted', async ({ browser }) => {
     const { host } = await createRoom(browser);
     await fillWithBots(host);
     await dealPlayable(host, [host]);
@@ -254,6 +316,11 @@ test.describe('your own hand', () => {
 
     await target.click();
     await target.click();
+
+    // The second tap asks rather than throws, and the tile named in the question is the one that
+    // was tapped - the whole point of the lifted hand is being able to see which that is.
+    await expect(page.getByTestId('discard-confirm')).toBeVisible();
+    await page.getByTestId('discard-go').click();
 
     await expect(tiles).toHaveCount(16);
     await expect(page.locator('.discards mj-tile')).toHaveCount(1);

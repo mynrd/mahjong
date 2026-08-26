@@ -34,14 +34,18 @@ public class ReplayTests
     /// <summary>
     /// A hand where the next thing that happens is a draw. Straight after the deal the mano is
     /// holding 17 tiles and the phase is AwaitingDiscard, so nobody can draw until it has thrown
-    /// one and the claim window on it has closed.
+    /// one and the other three seats have answered it.
     /// </summary>
     private static GameState PastTheOpeningDiscard()
     {
         var state = Dealt();
+        var thrower = state.CurrentSeat;
 
-        MahjongGame.Discard(state, state.CurrentSeat, state.Hands[state.CurrentSeat].Concealed[0].Id, Now);
-        MahjongGame.ExpireClaimWindow(state, Now.AddMinutes(1));
+        MahjongGame.Discard(state, thrower, state.Hands[thrower].Concealed[0].Id, Now);
+
+        // Nothing times a window out, so the tile is answered rather than left to lapse.
+        for (var offset = 1; offset < MahjongGame.Seats; offset++)
+            MahjongGame.Pass(state, (thrower + offset) % MahjongGame.Seats, Now);
 
         Assert.Equal(GamePhase.AwaitingDraw, state.Phase);
         return state;
@@ -284,7 +288,9 @@ public class ReplayTests
         var thrown = state.Hands[0].Concealed[0];
         var all = dealEvents
             .Concat(MahjongGame.Discard(state, 0, thrown.Id, Now))
-            .Concat(MahjongGame.ExpireClaimWindow(state, Now.AddMinutes(1)))
+            .Concat(MahjongGame.Pass(state, 1, Now))
+            .Concat(MahjongGame.Pass(state, 2, Now))
+            .Concat(MahjongGame.Pass(state, 3, Now))
             .ToList();
 
         // TurnChanged carries a phase and nothing else, and ClaimWindowClosed is the only other

@@ -45,9 +45,9 @@ public sealed class GameService(
 
             var (state, events) = MahjongGame.Deal(rules, handNumber, mano, seed, clock.GetUtcNow());
 
-            // Which seats are bots is a fact about the room, but the rules need it: an assist-off
-            // window on a bot's discard is the one that gets a deadline. Stamped in before the
-            // state is serialised, so it survives a restart mid-hand along with everything else.
+            // Which seats are bots is a fact about the room, but the rules need it: a bot holding
+            // nothing that could take a discard is answered for where a person never is. Stamped in
+            // before the state is serialised, so it survives a restart mid-hand with everything else.
             foreach (var bot in room.Players.Where(p => p.IsBot)) state.BotSeats.Add(bot.Seat);
 
             var game = new Game
@@ -100,6 +100,7 @@ public sealed class GameService(
                     GameMove.Discard d => MahjongGame.Discard(state, seat, d.TileId, now),
                     GameMove.Claim c => MahjongGame.Claim(state, seat, c.Kind, c.TileIds, now),
                     GameMove.Pass => MahjongGame.Pass(state, seat, now),
+                    GameMove.Withdraw => MahjongGame.Withdraw(state, seat),
                     GameMove.SecretKang k => MahjongGame.DeclareSecretKang(state, seat, Tile.Parse(k.Face)),
                     GameMove.Sagasa s => MahjongGame.DeclareSagasa(state, seat, Tile.Parse(s.Face)),
                     GameMove.Todas => MahjongGame.DeclareTodasOnDraw(state, seat),
@@ -110,7 +111,7 @@ public sealed class GameService(
             {
                 // An illegal move is a normal thing for a client to send: two players can both tap
                 // Pung and only one can win. It is reported back, not logged as a fault.
-                return Result.Fail("IllegalMove", ex.Message);
+                return Result.Fail(ex.Code ?? "IllegalMove", ex.Message);
             }
 
             var game = await db.Games.FirstAsync(g => g.Id == session.GameId, cancel);
@@ -124,8 +125,9 @@ public sealed class GameService(
     }
 
     /// <summary>
-    /// Closes a claim window whose deadline has passed. Called by the ticker rather than a timer,
-    /// so a window that was open when the process restarted still gets closed.
+    /// Awards the discard to the call standing on it, once the beat for calling over that one has
+    /// passed. Called by the ticker rather than a timer, so a call left standing when the process
+    /// restarted is still resolved.
     /// </summary>
     public async Task ExpireClaimsAsync(RoomSession session, CancellationToken cancel = default)
     {
@@ -138,9 +140,9 @@ public sealed class GameService(
 
             var now = clock.GetUtcNow();
 
-            // NextDeadline covers both clocks a window can be running: its own, and the ten seconds
-            // each seat that pressed pung or kang has to name the tiles. Nothing due, nothing to do.
-            if (state.Pending is not { NextDeadline: { } due } || due > now) return;
+            // Null until somebody calls, which is the normal state of a window: nobody is timed
+            // for answering a discard. Nothing due, nothing to do.
+            if (state.Pending is not { DeadlineUtc: { } due } || due > now) return;
 
             var events = MahjongGame.ExpireClaimWindow(state, now);
             if (events.Count == 0) return;
@@ -386,6 +388,7 @@ public abstract record GameMove
     public sealed record Discard(int TileId) : GameMove;
     public sealed record Claim(ClaimKind Kind, IReadOnlyList<int> TileIds) : GameMove;
     public sealed record Pass : GameMove;
+    public sealed record Withdraw : GameMove;
     public sealed record SecretKang(string Face) : GameMove;
     public sealed record Sagasa(string Face) : GameMove;
     public sealed record Todas : GameMove;

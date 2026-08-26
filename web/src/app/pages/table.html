@@ -1,5 +1,10 @@
 @if (view(); as view) {
-  <div class="table" [class.my-turn]="isMyTurn()" [class.hand-open]="handOpen()" data-testid="table">
+  <div
+    class="table"
+    [class.my-turn]="isMyTurn()"
+    [class.hand-open]="handOpen()"
+    data-testid="table"
+  >
     <!-- ---------------------------------------------------------------- status bar -->
     <header class="status">
       <div class="left">
@@ -18,7 +23,12 @@
       </div>
 
       <div class="right">
-        <button class="chip" type="button" (click)="showScores.set(!showScores())" data-testid="toggle-scores">
+        <button
+          class="chip"
+          type="button"
+          (click)="showScores.set(!showScores())"
+          data-testid="toggle-scores"
+        >
           Scores
         </button>
         @if (connection() !== 'connected') {
@@ -29,7 +39,11 @@
 
     <!-- ---------------------------------------------------------------- opponents -->
     <section class="opponents">
-      @for (opponent of [leftSeat(), acrossSeat(), rightSeat()]; track opponent?.seat; let i = $index) {
+      @for (
+        opponent of [leftSeat(), acrossSeat(), rightSeat()];
+        track opponent?.seat;
+        let i = $index
+      ) {
         @if (opponent) {
           <article
             class="opponent"
@@ -53,6 +67,33 @@
               <span class="sr-only">Show what {{ opponent.displayName }} has on the table</span>
             </button>
 
+            <!-- Sits above the card-wide button in z-order, so a tap on the eye is answered by the
+                 eye rather than by the sheet-opening button underneath it. -->
+            <button
+              class="eye"
+              type="button"
+              [class.on]="backsOpen(opponent.seat)"
+              (click)="toggleBacks(opponent.seat)"
+              [attr.aria-pressed]="backsOpen(opponent.seat)"
+              [attr.aria-label]="
+                (backsOpen(opponent.seat) ? 'Hide' : 'Show') +
+                ' the ' +
+                opponent.concealedCount +
+                ' tiles ' +
+                opponent.displayName +
+                ' is holding'
+              "
+              [attr.data-testid]="'opponent-' + opponent.seat + '-eye'"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M1.8 12S5.9 5.4 12 5.4 22.2 12 22.2 12 18.1 18.6 12 18.6 1.8 12 1.8 12Z" />
+                <circle cx="12" cy="12" r="3.2" />
+                @if (!backsOpen(opponent.seat)) {
+                  <line x1="3.6" y1="20.4" x2="20.4" y2="3.6" />
+                }
+              </svg>
+            </button>
+
             <div class="who">
               <span class="wind">{{ windOf(opponent.seat) }}</span>
               <span class="name">{{ opponent.displayName }}</span>
@@ -68,9 +109,19 @@
             </div>
 
             <div class="their-tiles">
-              <div class="hidden-hand" [attr.data-testid]="'opponent-' + opponent.seat + '-count'">
-                @for (n of repeat(opponent.concealedCount); track n) {
-                  <mj-tile code="back" />
+              <!-- Face down by default: sixteen blank tiles say nothing a number does not, and on a
+                   phone they say it across four rows that the action bar at the bottom pays for. -->
+              <div
+                class="hidden-hand"
+                [class.counted]="!backsOpen(opponent.seat)"
+                [attr.data-testid]="'opponent-' + opponent.seat + '-count'"
+              >
+                @if (backsOpen(opponent.seat)) {
+                  @for (n of repeat(opponent.concealedCount); track n) {
+                    <mj-tile code="back" />
+                  }
+                } @else {
+                  <span class="count">{{ opponent.concealedCount }} in hand</span>
                 }
               </div>
 
@@ -109,6 +160,11 @@
       @if (view.discards.length === 0) {
         <p class="muted empty">No tiles thrown yet.</p>
       } @else {
+        <!-- The last tile is tappable for as long as you can still answer it, and outlined so
+             that it looks it. Nothing is timing the window, so a dialog closed too early or looked
+             away from costs nothing: the tile is still lying there and this is the way back to it.
+             The outline says only that the tile is unanswered, never what your hand could do with
+             it, so every seat that has not answered sees exactly the same thing. -->
         <div class="discards">
           @for (discard of view.discards; track discard.tile.id) {
             <mj-tile
@@ -117,7 +173,16 @@
               [highlight]="discard.tile.id === liveDiscard()?.tile?.id"
               [joker]="isJoker(discard.tile.code)"
               [class.landing]="discard.tile.id === landing()?.id"
+              [class.claimable]="discard.tile.id === claimableDiscard()?.tile?.id"
               [attr.data-from]="discard.tile.id === landing()?.id ? landing()!.from : null"
+              [attr.data-claimable]="
+                discard.tile.id === claimableDiscard()?.tile?.id ? 'yes' : null
+              "
+              [attr.role]="discard.tile.id === claimableDiscard()?.tile?.id ? 'button' : null"
+              [attr.tabindex]="discard.tile.id === claimableDiscard()?.tile?.id ? 0 : null"
+              (click)="takeLiveDiscard(discard)"
+              (keydown.enter)="takeLiveDiscard(discard)"
+              (keydown.space)="takeLiveDiscard(discard)"
             />
           }
         </div>
@@ -163,6 +228,19 @@
           <span class="balance" [class.down]="me.balance < 0" data-testid="my-balance">
             {{ me.balance > 0 ? '+' : '' }}{{ me.balance }}
           </span>
+          <!-- Suit and rank, nothing grouped. The tiles are drawn in that order already, so what
+               this undoes is the blocks - the ones you pushed together, and Auto Arrange if it was
+               on. It is the way back to a plain hand after a regroup that went wrong. -->
+          <button
+            class="chip"
+            type="button"
+            (click)="sortHand()"
+            aria-label="Sort your hand and clear every group"
+            data-testid="sort-hand"
+          >
+            Sort
+          </button>
+
           <!-- On/off in the chip itself. "Auto Arrange" on its own says what the button is about
                but not which way it is set, and the difference between a laid-out hand and a hand
                you laid out yourself is not always obvious from the tiles. -->
@@ -212,7 +290,11 @@
 
         <div class="hand" id="my-hand" data-testid="my-hand" [class.grouped]="arranged()">
           @for (block of handBlocks(); track block.key) {
-            <div class="group" [attr.data-group]="block.kind" [attr.aria-label]="block.ariaLabel || null">
+            <div
+              class="group"
+              [attr.data-group]="block.kind"
+              [attr.aria-label]="block.ariaLabel || null"
+            >
               <div class="group-tiles">
                 @for (tile of block.tiles; track tile.id) {
                   <button
@@ -222,7 +304,8 @@
                     [class.arriving]="arriving().has(tile.id)"
                     [class.inert]="tileInert()"
                     [class.lifted-out]="dragged() === tile.id"
-                    [class.drop-target]="dropTarget() === tile.id"
+                    [class.drop-before]="dropSide(tile.id) === 'before'"
+                    [class.drop-after]="dropSide(tile.id) === 'after'"
                     (click)="tapTile(tile)"
                     (pointerdown)="onTilePointerDown($event, tile)"
                     (pointermove)="onTilePointerMove($event)"
@@ -246,7 +329,20 @@
                 }
               </div>
 
-              @if (block.label) {
+              <!-- The group itself is the button. Four identical tiles sitting together on your
+                   own turn are a secret kang waiting to be shown, and tapping the block is the
+                   gesture the hands make at a real table. -->
+              @if (blockMove(block); as move) {
+                <button
+                  class="group-declare"
+                  type="button"
+                  (click)="runMove(move)"
+                  [attr.aria-label]="move.label"
+                  data-testid="declare-in-hand"
+                >
+                  {{ moveWord(move) }}
+                </button>
+              } @else if (block.label) {
                 <span class="group-label">{{ block.label }}</span>
               }
             </div>
@@ -258,100 +354,181 @@
     <!-- ---------------------------------------------------------------- action bar
          One row, one fixed height, whatever is going on. Everything that used to make it grow -
          the claim options, one button per secret-kang face - now opens a sheet instead, so the bar
-         never moves under a thumb that is already on its way to it. -->
+         never moves under a thumb that is already on its way to it.
+
+         Two slots: whatever the turn is doing on the left, and Draw on the right for the whole
+         hand, lit or not. Every tile a player takes off the wall comes through that one button, so
+         it does not get to move around or come and go. -->
     <footer class="actions">
-      @if (view.phase === 'HandOver') {
-        <span class="prompt">Hand finished</span>
-      } @else if (view.claim; as pending) {
-        @if (!pending.youAnswered) {
-          <div class="claim" [class.urgent]="claimSeconds() <= 2" data-testid="claim-strip">
-            <div class="claim-tile">
-              <mj-tile
-                [code]="pending.tile.code"
-                [highlight]="!claimWins()"
-                [hint]="claimWins() ? 'win' : 'none'"
-                [badgeText]="claimWins() ? '!' : null"
-                [joker]="isJoker(pending.tile.code)"
-              />
-              @if (claimTimed()) {
-                <span class="countdown" data-testid="claim-strip-countdown">{{ claimSeconds() }}s</span>
-              }
-            </div>
-
-            <div class="claim-buttons">
-              @if (!claimDialogOpen()) {
-                <button class="btn" type="button" (click)="openClaimDialog()" data-testid="claim-open">
-                  @if (assisted()) {
-                    {{ candidates().length ? 'Options (' + candidates().length + ')' : 'Options' }}
-                  } @else {
-                    Take
-                  }
-                </button>
-              }
-
-              <button
-                class="btn secondary"
-                type="button"
-                (click)="pass()"
-                [attr.data-testid]="claimDialogOpen() ? 'claim-pass-quick' : 'claim-pass'"
+      <div class="bar">
+        <div class="bar-body">
+          @if (view.phase === 'HandOver') {
+            <span class="prompt">Hand finished</span>
+          } @else if (view.claim; as pending) {
+            @if (!pending.youAnswered) {
+              <div
+                class="claim"
+                [class.urgent]="claimTimed() && claimSeconds() <= 2"
+                data-testid="claim-strip"
               >
-                Pass
-              </button>
+                <div class="claim-tile">
+                  <mj-tile
+                    [code]="pending.tile.code"
+                    [highlight]="!claimWins()"
+                    [hint]="claimWins() ? 'win' : 'none'"
+                    [badgeText]="claimWins() ? '!' : null"
+                    [joker]="isJoker(pending.tile.code)"
+                  />
+                  @if (claimTimed()) {
+                    <span class="countdown" data-testid="claim-strip-countdown"
+                      >{{ claimSeconds() }}s</span
+                    >
+                  }
+                </div>
 
-              <!-- Only the seat about to play gets this, and only at an unassisted table. Passing
-                   says "not for me" and leaves the window open on everyone else; there is no
-                   deadline behind it, so somebody has to be able to move the game on. -->
-              @if (canDrawThrough()) {
-                <button class="btn secondary" type="button" (click)="drawInstead()" data-testid="claim-draw">
-                  Draw instead
-                </button>
-              }
-            </div>
-          </div>
-        } @else if (pending.burned) {
-          <span class="prompt" data-testid="claim-burned">
-            Out of time to name your tiles. That one is gone.
-          </span>
-        } @else if (canDrawThrough()) {
-          <div class="claim" data-testid="claim-strip">
-            <span class="prompt">Waiting for the others...</span>
-            <button class="btn secondary" type="button" (click)="drawInstead()" data-testid="claim-draw">
-              Draw instead
-            </button>
-          </div>
-        } @else {
-          <span class="prompt">Waiting for the others...</span>
-        }
-      } @else if (isMyTurn() && view.phase === 'AwaitingDiscard') {
-        <div class="turn" data-testid="turn-bar">
-          <span class="prompt">
-            @if (selected()) {
-              Tap again to throw it
+                @if (callLine(); as line) {
+                  <span class="call-line" data-testid="claim-call-line">{{ line }}</span>
+                }
+
+                <div class="claim-buttons">
+                  @if (!claimDialogOpen()) {
+                    <button
+                      class="btn"
+                      type="button"
+                      (click)="openClaimDialog()"
+                      data-testid="claim-open"
+                    >
+                      @if (assisted()) {
+                        {{
+                          candidates().length ? 'Options (' + candidates().length + ')' : 'Options'
+                        }}
+                      } @else {
+                        Take
+                      }
+                    </button>
+                  }
+
+                  <button
+                    class="btn secondary"
+                    type="button"
+                    (click)="pass()"
+                    [attr.data-testid]="claimDialogOpen() ? 'claim-pass-quick' : 'claim-pass'"
+                  >
+                    Pass
+                  </button>
+                </div>
+              </div>
+            } @else if (pending.outranked) {
+              <!-- Answered for, because what this seat called can no longer take the tile. Going
+                   quiet here is what made a chow look like it had been eaten by the app, so the
+                   call that beat it is named. -->
+              <span class="prompt" data-testid="claim-outranked">
+                {{ callLine() }} - your {{ pending.pressedKind ?? 'call' }} cannot beat that.
+              </span>
+            } @else if (yourStandingCall()) {
+              <!-- You called it first, so it is yours unless somebody calls over it. Nothing takes
+                   it off you for being slow, and nothing but this button hands it back. -->
+              <div class="claim" data-testid="claim-held">
+                <span class="prompt">
+                  You called <strong>{{ yourCallKind() }}</strong> - the tile is yours unless
+                  somebody calls over it.
+                </span>
+
+                <div class="claim-buttons">
+                  <button
+                    class="btn secondary"
+                    type="button"
+                    (click)="cancelPress()"
+                    data-testid="claim-let-go"
+                  >
+                    Let it go
+                  </button>
+                </div>
+              </div>
             } @else {
-              Your turn - pick a tile to throw
+              <span class="prompt" data-testid="claim-waiting">Waiting for the others...</span>
             }
-          </span>
+          } @else if (isMyTurn() && view.phase === 'AwaitingDiscard') {
+            <div class="turn" data-testid="turn-bar">
+              <span class="prompt">
+                @if (liftedMove()) {
+                  Tap again to throw it, or show all four
+                } @else if (selected()) {
+                  Tap again to discard it
+                } @else {
+                  Your turn - pick a tile to throw
+                }
+              </span>
 
-          @if (view.yourTurn; as turn) {
-            <div class="turn-buttons">
-              @if (turn.canDeclareTodas) {
-                <button class="btn danger" type="button" (click)="todas()" data-testid="declare-todas">Todas!</button>
-              }
-              @if (extraMoves().length) {
-                <button class="btn secondary" type="button" (click)="showMoves.set(true)" data-testid="open-moves">
-                  Moves ({{ extraMoves().length }})
-                </button>
+              @if (view.yourTurn; as turn) {
+                <div class="turn-buttons">
+                  <!-- The lifted tile's own declaration. The Moves sheet is the whole list, but it
+                       is a list you have to remember to open, and a fourth tile nobody declares is
+                       three tiles of a hand doing nothing. -->
+                  @if (liftedMove(); as move) {
+                    <button
+                      class="btn"
+                      type="button"
+                      (click)="runMove(move)"
+                      [attr.aria-label]="move.label"
+                      data-testid="declare-lifted"
+                    >
+                      {{ moveWord(move) }}
+                    </button>
+                  }
+                  @if (turn.canDeclareTodas) {
+                    <button
+                      class="btn danger"
+                      type="button"
+                      (click)="todas()"
+                      data-testid="declare-todas"
+                    >
+                      Todas!
+                    </button>
+                  }
+                  @if (extraMoves().length) {
+                    <button
+                      class="btn secondary"
+                      type="button"
+                      (click)="showMoves.set(true)"
+                      data-testid="open-moves"
+                    >
+                      Moves ({{ extraMoves().length }})
+                    </button>
+                  }
+                </div>
               }
             </div>
+          } @else if (myDrawTurn()) {
+            <span class="prompt" data-testid="draw-bar">Your turn - take a tile</span>
+          } @else if (view.phase === 'AwaitingClaims') {
+            <!-- Your own discard, so there is no window on it for you. The other three are looking
+                 at it, and that is what the table is waiting on. -->
+            <span class="prompt" data-testid="claim-waiting">Waiting for the others...</span>
+          } @else {
+            <span class="prompt" data-testid="waiting">
+              {{ view.seats[view.currentSeat].displayName }} is playing
+            </span>
           }
         </div>
-      } @else if (isMyTurn()) {
-        <span class="prompt">Drawing...</span>
-      } @else {
-        <span class="prompt" data-testid="waiting">
-          {{ view.seats[view.currentSeat].displayName }} is playing
-        </span>
-      }
+
+        <!-- Always here, on or off, and always in the same place. Nothing takes a tile off the wall
+             for you any more, so this is the one button the whole hand goes through - and a button
+             that moved around, or appeared only when it was live, would be a button you had to look
+             for every turn. Lit when the wall is yours to take from: your turn, or the seat after a
+             discard nothing is timing, where drawing is what lets the game move on. -->
+        <button
+          class="btn draw"
+          type="button"
+          (click)="draw()"
+          [disabled]="!canDraw()"
+          [attr.title]="drawHint()"
+          [attr.aria-label]="drawHint()"
+          data-testid="draw"
+        >
+          Draw
+        </button>
+      </div>
     </footer>
 
     <!-- ---------------------------------------------------------------- overlays -->
@@ -374,10 +551,11 @@
       @if (!pending.youAnswered && claimDialogOpen()) {
         <div
           class="claim-dialog panel"
-          [class.urgent]="claimSeconds() <= 2"
+          [class.urgent]="claimTimed() && claimSeconds() <= 2"
           role="dialog"
           aria-label="Take the discard"
           data-testid="claim-bar"
+          [attr.data-from-seat]="pending.fromSeat"
         >
           <header class="claim-head">
             <mj-tile
@@ -389,7 +567,10 @@
             />
 
             <div class="claim-what">
-              <strong>{{ view.seats[pending.fromSeat].displayName }} threw {{ label(pending.tile.code) }}</strong>
+              <strong
+                >{{ view.seats[pending.fromSeat].displayName }} threw
+                {{ label(pending.tile.code) }}</strong
+              >
               @if (claimTimed()) {
                 <span class="countdown" data-testid="claim-countdown">{{ claimSeconds() }}s</span>
               } @else {
@@ -409,25 +590,39 @@
           </header>
 
           @if (!assisted()) {
-            <!-- Nothing has been worked out for this player, so there is nothing to list. The four
-                 calls go up instead, and pressing one is only half an answer: the tiles it costs
-                 are tapped out of the hand afterwards. Pung and Kang start a clock when pressed,
-                 because a chow may be waiting underneath them for the tile. -->
+            <!-- Nothing has been worked out for this player, so there is nothing to list. The
+                 calls go up instead - every one the rules could allow off this tile, which is all
+                 of them bar a chow the seating rules out - and pressing one is only half an answer:
+                 the tiles it costs are tapped out of the hand afterwards. Pung and Kang start a
+                 clock when pressed, because a chow may be waiting underneath them for the tile. -->
             @if (pressedKind(); as pressed) {
               <p class="claim-naming" data-testid="claim-naming">
-                <strong>{{ pressed }}</strong> - now tap the
-                {{ pressed === 'Kang' ? 'three' : 'two' }} tiles in your hand it costs.
+                <strong>{{ pressed }}</strong> - the tile is yours. Tap the
+                {{ pressed === 'Kang' ? 'three' : 'two' }} tiles in your hand it costs, in your own
+                time, or take the call back.
               </p>
             } @else {
+              @if (standingCall(); as standing) {
+                <p class="claim-standing" data-testid="claim-standing">
+                  <strong>{{ seatName(standing.seat) }}</strong>
+                  {{ standing.state === 'Calling' ? 'is calling' : 'called' }}
+                  <strong>{{ standing.called }}</strong
+                  >. The tile is theirs unless they let it go, or you call something that beats it.
+                </p>
+              }
+
               <div class="calls" data-testid="claim-calls">
-                @for (kind of manualKinds; track kind) {
+                @for (kind of callKinds(); track kind) {
                   <button
                     class="option call"
                     [class.danger]="kind === 'Todas'"
                     type="button"
                     (click)="pressCall(kind)"
+                    [disabled]="!kindLive(kind)"
+                    [attr.title]="kindLive(kind) ? null : callLine()"
                     [attr.data-testid]="'claim-call-' + kind"
                     [attr.data-claim-kind]="kind"
+                    [attr.data-claim-live]="kindLive(kind)"
                     [attr.aria-label]="kind"
                   >
                     <span class="option-kind">{{ kind === 'Todas' ? 'Todas!' : kind }}</span>
@@ -477,7 +672,13 @@
 
           <div class="claim-foot">
             @if (assisted()) {
-              <button class="btn" type="button" (click)="takePick()" [disabled]="!pickMatch()" data-testid="claim-take">
+              <button
+                class="btn"
+                type="button"
+                (click)="takePick()"
+                [disabled]="!pickMatch()"
+                data-testid="claim-take"
+              >
                 {{ pickMatch() ? 'Take - ' + pickMatch()!.describe : 'Take' }}
               </button>
             } @else {
@@ -491,16 +692,70 @@
                 Take
               </button>
             }
-            <button class="btn secondary" type="button" (click)="pass()" data-testid="claim-pass">Pass</button>
+
+            <!-- Only once something has been called. Nothing is counting it down, so the way out
+                 of a call has to be a button: it holds the tile against the other three until it
+                 is let go. -->
+            @if (pressedKind()) {
+              <button
+                class="btn secondary"
+                type="button"
+                (click)="cancelPress()"
+                data-testid="claim-cancel"
+              >
+                Cancel call
+              </button>
+            }
+
+            <!-- Solid rather than outlined when a bot threw it, because then this is the button
+                 the hand is actually waiting on: nothing is timing that window, and the three
+                 people at the table each end their own part of it by pressing it. -->
+            <button
+              class="btn"
+              [class.secondary]="!claimFrom()?.isBot"
+              type="button"
+              (click)="pass()"
+              data-testid="claim-pass"
+            >
+              Pass
+            </button>
           </div>
 
-          @if (pickError(); as problem) {
+          @if (refusal(); as refused) {
+            <div class="claim-invalid" data-testid="claim-refused" role="alert">
+              <p>{{ refused.text }}</p>
+
+              @if (refused.need.length) {
+                <div class="needs">
+                  @for (run of refused.need; track $index) {
+                    @if (!$first) {
+                      <span class="or">or</span>
+                    }
+                    <span class="need" aria-hidden="true">
+                      @for (face of run; track $index) {
+                        <mj-tile [code]="face" [joker]="isJoker(face)" />
+                      }
+                    </span>
+                  }
+                </div>
+              }
+            </div>
+          } @else if (pickError(); as problem) {
             <p class="claim-invalid" data-testid="claim-invalid" role="alert">{{ problem }}</p>
           } @else {
             <p class="legend" data-testid="claim-legend">
-              @if (assisted()) {
-                Or tap tiles in your hand and press Take. Green outline with a letter = one way to use
-                that tile, dashed gold = more than one, red = this tile wins the hand.
+              @if (pressedKind()) {
+                Nothing is counting. The tile is yours until you name the tiles or take the call
+                back, and it is nobody else's until you do.
+              } @else if (claimTimed()) {
+                Somebody has called this tile. The countdown is how long there is to call something
+                that beats it.
+              } @else if (claimFrom()?.isBot) {
+                Nothing is counting down - a bot threw this, so the table waits for all three of you
+                to press Pass.
+              } @else if (assisted()) {
+                Or tap tiles in your hand and press Take. Green outline with a letter = one way to
+                use that tile, dashed gold = more than one, red = this tile wins the hand.
               } @else {
                 Nothing is marked for you at this table. Press the call, then tap the tiles it costs
                 and press Take.
@@ -529,7 +784,9 @@
                 [attr.data-testid]="move.testId"
                 [attr.aria-label]="move.label"
               >
-                <span class="option-kind">{{ move.kind === 'SecretKang' ? 'Secret kang' : 'Sagasa' }}</span>
+                <span class="option-kind">{{
+                  move.kind === 'SecretKang' ? 'Secret kang' : 'Sagasa'
+                }}</span>
                 <span class="combo" aria-hidden="true">
                   @for (face of move.tiles; track $index) {
                     <mj-tile [code]="face" [joker]="isJoker(face)" />
@@ -539,13 +796,54 @@
             }
           </div>
 
-          <button class="btn wide secondary" type="button" (click)="showMoves.set(false)">Close</button>
+          <button class="btn wide secondary" type="button" (click)="showMoves.set(false)">
+            Close
+          </button>
         </div>
       </div>
     }
 
-    @if (lastError(); as error) {
-      <p class="floating-error" data-testid="move-error">{{ error }}</p>
+    <!-- Asking before a tile leaves the hand. Centred over the table with a backdrop, unlike the
+         claim dialog: there is nothing behind it to read while it is up, and covering the table is
+         the point - the question is about the one tile it is showing. -->
+    @if (confirmingTile(); as tile) {
+      <div class="sheet" (click)="cancelDiscard()">
+        <div
+          class="sheet-body panel"
+          role="dialog"
+          aria-label="Discard this tile"
+          (click)="$event.stopPropagation()"
+          data-testid="discard-confirm"
+        >
+          <h2>Discard this tile?</h2>
+
+          <div class="confirm-tile">
+            <mj-tile [code]="tile.code" [joker]="isJoker(tile.code)" />
+          </div>
+
+          <p class="confirm-what" data-testid="discard-confirm-label">{{ label(tile.code) }}</p>
+
+          <div class="confirm-buttons">
+            <button
+              class="btn secondary"
+              type="button"
+              (click)="cancelDiscard()"
+              data-testid="discard-cancel"
+            >
+              Cancel
+            </button>
+
+            <button class="btn" type="button" (click)="confirmDiscard()" data-testid="discard-go">
+              Discard Tile
+            </button>
+          </div>
+        </div>
+      </div>
+    }
+
+    <!-- Everything the dialog is not already showing as tiles. -->
+    @if (!refusal() && lastError()) {
+      <p class="floating-error" data-testid="move-error">{{ lastError() }}</p>
     }
 
     <!-- One player, big enough to read from across the room. Only the tiles that are actually
@@ -592,7 +890,12 @@
             <p class="muted none">Nothing on the table yet - every tile is still in hand.</p>
           }
 
-          <button class="btn wide secondary" type="button" (click)="zoomSeat.set(null)" data-testid="seat-sheet-close">
+          <button
+            class="btn wide secondary"
+            type="button"
+            (click)="zoomSeat.set(null)"
+            data-testid="seat-sheet-close"
+          >
             Close
           </button>
         </div>
@@ -613,7 +916,9 @@
               </li>
             }
           </ul>
-          <button class="btn wide secondary" type="button" (click)="showScores.set(false)">Close</button>
+          <button class="btn wide secondary" type="button" (click)="showScores.set(false)">
+            Close
+          </button>
         </div>
       </div>
     }
@@ -649,7 +954,12 @@
             </ul>
           }
 
-          <button class="btn wide" type="button" (click)="backToLobby()" data-testid="back-to-lobby">
+          <button
+            class="btn wide"
+            type="button"
+            (click)="backToLobby()"
+            data-testid="back-to-lobby"
+          >
             Back to the table
           </button>
         </div>

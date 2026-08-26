@@ -68,9 +68,15 @@ dotnet publish server\src\Mahjong.Api -c Release -o publish
 3. Empty seats can be filled with bots, so a table of two or three still works.
 4. The host deals. From then on the game runs itself.
 
-Tap a tile to lift it, tap again to throw it. When somebody else throws a tile you can use, a bar
-appears with what you may call and a countdown. Refreshing, closing the tab or losing wifi does not
-cost the seat: the same browser comes back to the same hand holding the same tiles.
+Press **Draw** to take your tile off the wall, tap a tile to lift it, tap again to put it up, then
+answer **Discard Tile** - nothing leaves your hand on a tap alone. Dragging a tile into the middle
+throws it outright, no question asked. Every tile anybody throws comes up in a dialog over the top
+of the table, with whatever you may call on it - so nothing goes past while you are looking
+somewhere else. A tile a **bot** threw waits there until all three of you press **Next**; a tile a
+person threw is on a short clock instead.
+
+Refreshing, closing the tab or losing wifi does not cost the seat: the same browser comes back to
+the same hand holding the same tiles.
 
 ---
 

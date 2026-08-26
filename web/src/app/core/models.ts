@@ -63,28 +63,62 @@ export interface ClaimCandidateView {
   describe: string;
 }
 
+/** Where one seat has got to on the open discard, as much of it as the table can hear. */
+export type SeatCallState = 'Waiting' | 'Passed' | 'Calling' | 'Called' | 'Outranked';
+
+/**
+ * One seat's public part in the open claim window. What they called is sent as soon as they call
+ * it, for the same reason it is shouted at a table rather than whispered: the seats that did not
+ * make it have to know it happened before they spend the window answering a tile already gone.
+ */
+export interface SeatCallView {
+  seat: number;
+  state: SeatCallState;
+  /** The kind, whenever there is one. */
+  called: ClaimKind | null;
+}
+
 export interface ClaimPromptView {
   tile: TileView;
   fromSeat: number;
-  /** Null at an unassisted table, where the window has no deadline. */
+  /**
+   * When the call standing on this tile takes it, or null while nobody has called - which is the
+   * normal state of a window. Nobody is timed for answering a discard.
+   */
   deadlineUtc: string | null;
-  /** How long the window was when it opened. The countdown bar needs this to know how full to be. */
+  /** How long that beat was when it started. The countdown bar needs this to know how full to be. */
   windowSeconds: number;
   /** Empty at an unassisted table: working out what you can take is your job there. */
   yourOptions: ClaimKind[];
   /** One entry per distinct legal group. Highest-ranked kind first. Empty when unassisted. */
   candidates: ClaimCandidateView[];
   youAnswered: boolean;
-  /** Unassisted: what you pressed and still owe the tiles for. */
+  /** Unassisted: what you pressed and still owe the tiles for. Nothing is counting against it. */
   pressedKind: ClaimKind | null;
-  /** When that press is dropped for taking too long. Set for a pung or kang, null for a chow. */
-  namingDeadlineUtc: string | null;
-  /** How long that clock was when it started, for the countdown bar. */
-  namingSeconds: number;
-  /** You pressed pung or kang and never named the tiles in time. Out of this discard. */
-  burned: boolean;
+  /** What you have called on this tile, half made or finished. Null when you have not called. */
+  yourCall: ClaimKind | null;
   /** You have a claim on this tile, finished or half made. Unlike youAnswered, a pass is not one. */
   youClaimed: boolean;
+  /**
+   * Your call was beaten by a stronger one and you were answered for. Sent beside youAnswered
+   * rather than folded into it: "you passed" and "a pung took it off you" are the same fact to the
+   * engine and nothing like the same thing to somebody who had been choosing tiles.
+   */
+  outranked: boolean;
+  /**
+   * The calls still worth pressing. Everything at or under a call already made out loud is left
+   * out - rank arithmetic over what the whole table heard, never a reading of your hand, which is
+   * why it is safe to send with the helper off.
+   */
+  liveKinds: ClaimKind[];
+  /** What each other seat has said about this discard. The discarder is not in it. */
+  calls: SeatCallView[];
+  /**
+   * Whether a chow off this tile is open to your seat at all: a suited tile, thrown by the player
+   * immediately before you. Nothing about your hand goes into it, so it is sent even with assist
+   * off - and there it is what keeps the Chow button off a tile you could never chow anyway.
+   */
+  chowPossible: boolean;
 }
 
 export interface TurnOptionsView {

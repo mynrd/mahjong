@@ -61,8 +61,26 @@ test.describe('layout across screen sizes', () => {
 
     await page.getByTestId('auto-arrange').click();
 
-    // ---------------------------------------------------------------- action bar
+    // ---------------------------------------------------------------- the action bar stays put
+    // The bar carries Draw, and Draw is the only way a tile leaves the wall, so it going off the
+    // bottom is not a cosmetic problem - it is a table nobody can play. It used to: the page was
+    // `min-height: 100dvh` and anything that grew above the bar pushed it past the fold, which on
+    // a phone is a scroll nobody knows to make. The page is exactly one screen now, and the parts
+    // that can grow scroll inside themselves.
     await expect(page.getByTestId('turn-bar')).toBeInViewport();
+    await expect(page.getByTestId('draw')).toBeInViewport();
+    await noPageScroll(page);
+
+    // Opening all three opponents' hands is the biggest thing that can happen above the bar: it is
+    // forty-eight tiles, and on a phone they wrap into rows that used to come out of the bottom.
+    const eyes = page.locator('.opponent .eye');
+    for (let i = 0; i < (await eyes.count()); i++) await eyes.nth(i).click();
+
+    await expect(page.locator('.opponent .hidden-hand mj-tile').first()).toBeVisible();
+    await expect(page.getByTestId('draw')).toBeInViewport();
+    await page.screenshot({ path: shot('05-table-revealed') });
+    await noSidewaysScroll(page);
+    await noPageScroll(page);
 
     await closeAll([host]);
   });
@@ -80,4 +98,18 @@ async function noSidewaysScroll(page: import('@playwright/test').Page): Promise<
 
   // One pixel of slack for sub-pixel rounding on fractional device pixel ratios.
   expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.clientWidth + 1);
+}
+
+/**
+ * The table does not scroll vertically either. Everywhere else on the site a long page is fine;
+ * here it is how the action bar goes missing, because the bar is the last row of the page and a
+ * page taller than the screen puts its last row below the fold.
+ */
+async function noPageScroll(page: import('@playwright/test').Page): Promise<void> {
+  const overflow = await page.evaluate(() => {
+    const doc = document.documentElement;
+    return { scrollHeight: doc.scrollHeight, clientHeight: doc.clientHeight };
+  });
+
+  expect(overflow.scrollHeight).toBeLessThanOrEqual(overflow.clientHeight + 1);
 }

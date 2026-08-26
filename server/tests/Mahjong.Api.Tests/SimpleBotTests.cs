@@ -49,16 +49,16 @@ public class SimpleBotTests
             Tile = tile,
             FromSeat = DiscarderSeat,
             OpenedUtc = Now,
-            DeadlineUtc = assisted ? Now.AddSeconds(6) : null,
+            DeadlineUtc = null,
         };
 
         return state;
     }
 
-    /// <summary>An unassisted window the bot has already passed on, so only patience is left.</summary>
-    private static GameState PassedOn(string botHand, string discard)
+    /// <summary>A window the bot has already passed on, so only patience is left.</summary>
+    private static GameState PassedOn(string botHand, string discard, bool assisted = false)
     {
-        var state = Window(botHand, discard, assisted: false);
+        var state = Window(botHand, discard, assisted: assisted);
         state.Pending!.Passed.Add(BotSeat);
         return state;
     }
@@ -75,7 +75,7 @@ public class SimpleBotTests
         Assert.Equal(ClaimKind.Pung, move.Kind);
 
         // The tiles are named rather than left to the engine, because at an assist-off table an
-        // unnamed claim is only half an answer and would sit there until its clock ran out.
+        // unnamed claim is only half an answer and would sit on the tile until the seat finished.
         Assert.Equal(
             state.Hands[BotSeat].Concealed.Where(t => t.Tile.Code == "R1").Select(t => t.Id).Order(),
             move.TileIds.Order());
@@ -173,22 +173,37 @@ public class SimpleBotTests
     {
         var state = PassedOn("123d 456b 99c 258d 3b 7b", "1r");
 
-        // Seat 3 has pressed pung and is inside its ten seconds. That wait is already bounded, so
-        // drawing through it would make the clock decorative.
+        // Seat 3 has pressed pung and is counting its own tiles against the discard. Nothing bounds
+        // that now, and taking the tile out from under it is what the whole window is arranged not
+        // to do - so the bot waits however long it takes.
         state.Pending!.Declared[3] = new DeclaredClaim(ClaimKind.Pung, [], AwaitingTiles: true);
-        state.Pending.NamingDeadline[3] = Now.AddSeconds(10);
+
+        Assert.Null(SimpleBot.Decide(state, BotSeat, Now.AddSeconds(Patience)));
+        Assert.Null(SimpleBot.Decide(state, BotSeat, Now.AddHours(1)));
+    }
+
+    [Fact]
+    public void It_does_not_draw_through_a_call_that_is_already_finished()
+    {
+        var state = PassedOn("123d 456b 99c 258d 3b 7b", "1r");
+
+        // That one is on its own beat and takes the tile when it runs out. Drawing would bin a call
+        // the seat has already paid for.
+        state.Pending!.Declared[3] = new DeclaredClaim(ClaimKind.Pung, []);
+        state.Pending.DeadlineUtc = Now.AddSeconds(6);
 
         Assert.Null(SimpleBot.Decide(state, BotSeat, Now.AddSeconds(Patience)));
     }
 
     [Fact]
-    public void It_never_draws_through_an_assisted_window()
+    public void It_draws_through_an_assisted_window_as_well()
     {
-        // That one has a deadline of its own, and the ticker closes it.
-        var state = Window("123d 456b 99c 258d 3b 7b", "1r");
-        state.Pending!.Passed.Add(BotSeat);
+        // An assisted window used to close on its own six seconds, so the bot never had to end one.
+        // Nothing closes on a clock now, so this draw is what paces every table with a bot in it.
+        var state = PassedOn("123d 456b 99c 258d 3b 7b", "1r", assisted: true);
 
-        Assert.Null(SimpleBot.Decide(state, BotSeat, Now.AddSeconds(Patience)));
+        Assert.Null(SimpleBot.Decide(state, BotSeat, Now.AddSeconds(Patience - 1)));
+        Assert.IsType<GameMove.Draw>(SimpleBot.Decide(state, BotSeat, Now.AddSeconds(Patience)));
     }
 
     [Fact]

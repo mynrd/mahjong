@@ -32,11 +32,11 @@ public sealed class RoomSession(Guid roomId, string code)
     public ConcurrentDictionary<int, HashSet<string>> Connections { get; } = new();
 
     /// <summary>
-    /// The next thing the open claim window has due: its own deadline, or the soonest naming clock
-    /// on a seat that pressed pung or kang. The ticker uses this rather than a timer per window, so
-    /// both still fire correctly after a server restart mid-hand.
+    /// When the call standing on the open discard takes the tile, or null while nothing has been
+    /// called on it and so nothing is due. The ticker reads this off the state rather than keeping
+    /// a timer per window, so a call still resolves after a server restart mid-hand.
     /// </summary>
-    public DateTimeOffset? ClaimDeadline => State?.Pending?.NextDeadline;
+    public DateTimeOffset? ClaimDeadline => State?.Pending?.DeadlineUtc;
 
     /// <summary>When a bot is next allowed to move, so bots do not play instantly and unreadably.</summary>
     public DateTimeOffset BotNotBefore { get; set; } = DateTimeOffset.MinValue;

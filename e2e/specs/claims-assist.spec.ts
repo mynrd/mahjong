@@ -1,5 +1,14 @@
 import { Locator, Page, expect, test } from '@playwright/test';
-import { Player, closeAll, createRoomWithRules, dealPlayable, fillWithBots } from './helpers';
+import {
+  Player,
+  closeAll,
+  createRoomWithRules,
+  dealPlayable,
+  drawIfOffered,
+  fillWithBots,
+  passAnyClaim,
+  throwAnyTile,
+} from './helpers';
 
 /**
  * The claim window: which tiles are outlined, what happens when the player picks the wrong ones,
@@ -14,30 +23,44 @@ import { Player, closeAll, createRoomWithRules, dealPlayable, fillWithBots } fro
 
 const LONG_WINDOW = { claimWindowSeconds: 60 };
 
-/** Plays the host's turns against the bots until a claim window opens. */
+/**
+ * Plays the host's turns against the bots until a claim window opens that actually offers
+ * something.
+ *
+ * Every discard opens a window on every other seat, so most of them offer nothing at all and are
+ * simply answered and played through. What these specs are about is the ones with options on them.
+ */
 async function playUntilClaim(player: Player, timeoutMs = 150_000): Promise<void> {
   const page = player.page;
   const claimBar = page.getByTestId('claim-bar');
   const turnBar = page.getByTestId('turn-bar');
   const outcome = page.getByTestId('outcome');
 
+  // The draw prompt counts as something to do. Without it in this list the loop waits forty
+  // seconds on a table that is only waiting for this seat to press Draw, which is every second
+  // turn: nothing takes a tile off the wall by itself.
+  const drawBar = page.getByTestId('draw-bar');
+
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
-    await claimBar.or(turnBar).or(outcome).first().waitFor({ state: 'visible', timeout: 40_000 });
+    await claimBar.or(turnBar).or(drawBar).or(outcome).first().waitFor({ state: 'visible', timeout: 40_000 });
 
-    if (await claimBar.isVisible()) return;
     if (await outcome.isVisible()) throw new Error('The hand finished before a claim window opened.');
+
+    if (await claimBar.isVisible()) {
+      if ((await claimBar.locator('[data-claim-kind]').count()) > 0) return;
+
+      // Nothing on offer here. Saying so is what lets the tile go and the game carry on.
+      await passAnyClaim(player);
+      continue;
+    }
+
+    if (await drawIfOffered(player)) continue;
     if (!(await turnBar.isVisible())) continue;
 
     // Never declare a win: the hand would end and there would be no more discards to claim.
-    const tiles = page.getByTestId('my-hand').locator('.tile-button');
-    const last = tiles.last();
-
-    if (!(await last.isEnabled().catch(() => false))) continue;
-
-    await last.click({ timeout: 5_000 }).catch(() => undefined);
-    await last.click({ timeout: 5_000 }).catch(() => undefined);
+    await throwAnyTile(player);
   }
 
   throw new Error(`No claim window opened within ${timeoutMs / 1000}s.`);
@@ -77,8 +100,7 @@ test.describe('claiming a discard', () => {
     const page = host.page;
     const candidates = page.getByTestId('claim-bar').locator('[data-claim-kind]');
 
-    // A claim window is only offered when there is something to claim, so there is always at
-    // least one candidate button.
+    // playUntilClaim only stops on a window with options on it, so there is at least one button.
     expect(await candidates.count()).toBeGreaterThan(0);
 
     const hinted = await hintedTiles(page);
@@ -207,9 +229,11 @@ test.describe('claiming a discard', () => {
 
     await page.getByTestId('claim-take').click();
 
-    // The meld lands in front of the player, built from exactly the tiles that were picked.
+    // The meld lands in front of the player, built from exactly the tiles that were picked. Not
+    // instantly: the window waits for the other three seats to answer before it resolves, and the
+    // bots answer one game tick apart.
     const meld = page.locator('[data-testid="my-meld"]').last();
-    await expect(meld).toBeVisible();
+    await expect(meld).toBeVisible({ timeout: 30_000 });
 
     const melded = await meld
       .locator('mj-tile .tile')
@@ -218,7 +242,9 @@ test.describe('claiming a discard', () => {
     expect(melded.slice().sort()).toEqual([...wanted, thrown].sort());
 
     for (const id of picks) {
-      await expect(page.getByTestId('my-hand').locator(`.tile-button[data-tile-id="${id}"]`)).toHaveCount(0);
+      await expect(
+        page.getByTestId('my-hand').locator(`.tile-button[data-tile-id="${id}"]`),
+      ).toHaveCount(0, { timeout: 30_000 });
     }
 
     await closeAll([host]);

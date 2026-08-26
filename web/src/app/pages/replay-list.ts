@@ -4,7 +4,7 @@ import { RouterLink } from '@angular/router';
 import { Api } from '../core/api';
 import { ReplayListItemView } from '../core/models';
 import { ReplaySession } from '../core/replay-session';
-import { readError } from './create';
+import { readError } from '../core/errors';
 
 /**
  * The finished hands of one table.

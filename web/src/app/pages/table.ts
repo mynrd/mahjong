@@ -15,9 +15,12 @@ import {
   BONUS_LABELS,
   ClaimCandidateView,
   ClaimKind,
+  ClaimPromptView,
+  DiscardView,
   HandGroupKind,
   MeldView,
   PlayerGameView,
+  SeatCallView,
   SeatStateView,
   TileView,
 } from '../core/models';
@@ -62,11 +65,32 @@ export interface HandBlock {
   ariaLabel: string;
 }
 
+/**
+ * The gap a dragged tile would drop into: a tile already in the hand, and which side of it. A slot
+ * rather than a target tile, because a hand is arranged by putting a tile in a particular place -
+ * "third in that run", not just "somewhere in that group".
+ */
+export interface DropSlot {
+  id: number;
+  /** True for the gap on the leading side of that tile, false for the one after it. */
+  before: boolean;
+}
+
 /** One tile of the set a claim would build, drawn in the dialog so the shape is not just letters. */
 export interface ComboTile {
   code: string;
   /** The discard itself, outlined so it is clear which tile is being taken. */
   thrown: boolean;
+}
+
+/**
+ * A call the server refused, said in a way the table can draw: the sentence, and under it the
+ * tiles from your own hand the call would have taken. More than one row means "or", which is what
+ * a chow needs - a suited tile sits in up to three different runs.
+ */
+export interface ClaimRefusal {
+  text: string;
+  need: string[][];
 }
 
 /** A declaration you can make on your own turn, other than todas. */
@@ -99,6 +123,10 @@ const SAVE_DEBOUNCE_MS = 600;
   imports: [Tile, RouterLink],
   templateUrl: './table.html',
   styleUrl: './table.css',
+  // Every tile is an image and every image on a phone is one long press away from "Save image" or
+  // a preview that covers the table - and on a desktop, a right-click over a tile you meant to
+  // pick up. Nothing on this page has a menu worth having, so the whole table refuses one.
+  host: { '(contextmenu)': '$event.preventDefault()' },
 })
 export class TablePage implements OnDestroy {
   readonly code = input.required<string>();
@@ -112,8 +140,17 @@ export class TablePage implements OnDestroy {
   protected readonly lastError = this.game.lastError;
   protected readonly messages = this.game.messages;
 
-  /** The tile lifted out of the hand. A second tap on the same tile throws it. */
+  /** The tile lifted out of the hand. A second tap on the same tile offers it up to be thrown. */
   protected readonly selected = signal<number | null>(null);
+
+  /**
+   * The tile a second tap has put up for confirmation, if any.
+   *
+   * The two taps that throw a tile are the same gesture twice in the same place, which is exactly
+   * the shape of an accident - and a thrown tile is gone: the other three can claim it, and there
+   * is no rule that gives it back. So the tap no longer throws anything. It asks.
+   */
+  private readonly confirming = signal<number | null>(null);
 
   /**
    * Tiles tapped to build a claim with, and the discard they were picked against. Storing the
@@ -137,6 +174,17 @@ export class TablePage implements OnDestroy {
    * up to hand size.
    */
   protected readonly zoomSeat = signal<number | null>(null);
+
+  /**
+   * Seats whose row of face-down tiles is being drawn, by seat number.
+   *
+   * Empty by default, which is the whole point. Sixteen backs at 15px wrap onto three or four rows
+   * inside a card about a third of a phone wide, so three opponents were spending well over a
+   * hundred pixels of a 700px screen saying something a two-digit count says exactly as well - and
+   * that height came out of the bottom of the page, where the action bar lives. The eye on each
+   * card puts them back for anyone who wants to look at the shape of a hand.
+   */
+  private readonly openBacks = signal<ReadonlySet<number>>(new Set());
 
   /**
    * Layout mode for your own hand. Sticky, because the one-shot alternative goes stale the moment
@@ -182,11 +230,12 @@ export class TablePage implements OnDestroy {
 
   /** The tile being dragged, what it is over, and where to draw the ghost. */
   protected readonly dragged = signal<number | null>(null);
-  protected readonly dropTarget = signal<number | null>(null);
+  protected readonly dropTarget = signal<DropSlot | null>(null);
   protected readonly overPool = signal(false);
   protected readonly ghost = signal<{ x: number; y: number } | null>(null);
 
-  private press: { x: number; y: number; id: number; pointerId: number; el: HTMLElement } | null = null;
+  private press: { x: number; y: number; id: number; pointerId: number; el: HTMLElement } | null =
+    null;
 
   /** Set when a drag ends, so the click the browser fires afterwards does not also throw a tile. */
   private swallowClick = false;
@@ -257,6 +306,8 @@ export class TablePage implements OnDestroy {
       if (known) {
         this.manualGroups.set([]);
         this.held.set(null);
+        this.confirming.set(null);
+        this.selected.set(null);
       }
 
       return;
@@ -284,6 +335,14 @@ export class TablePage implements OnDestroy {
     // Read untracked: writing a signal this effect also reads would schedule itself again.
     const thrown = untracked(this.throwing);
     if (thrown !== null && !ids.has(thrown)) this.throwing.set(null);
+
+    // A tile lifted or put up for confirmation belongs to the discard step it was tapped in. Left
+    // standing, it would come back on the next one: the dialog springing open by itself, on a tile
+    // the player chose a turn ago.
+    if (!untracked(this.canThrowNow)) {
+      this.confirming.set(null);
+      this.selected.set(null);
+    }
   }
 
   /**
@@ -350,6 +409,16 @@ export class TablePage implements OnDestroy {
     return seat === null ? null : (this.view()?.seats[seat] ?? null);
   });
 
+  protected backsOpen(seat: number): boolean {
+    return this.openBacks().has(seat);
+  }
+
+  protected toggleBacks(seat: number): void {
+    const open = new Set(this.openBacks());
+    if (!open.delete(seat)) open.add(seat);
+    this.openBacks.set(open);
+  }
+
   private seatAt(offset: number): SeatStateView | null {
     const view = this.view();
     if (!view) return null;
@@ -374,21 +443,18 @@ export class TablePage implements OnDestroy {
   protected readonly assisted = computed(() => this.view()?.assisted !== false);
 
   /**
-   * The deadline the countdown is running against, or null when nothing is on a clock.
+   * The deadline the countdown is running against, or null when nothing is on a clock - which is
+   * how a window starts and how it stays until somebody calls.
    *
-   * At an assisted table that is the claim window. At an unassisted one the window has no deadline
-   * at all - nobody was told what the tile was good for, so nobody is being timed for spotting it -
-   * and the only clock is the ten seconds you get to name the tiles after pressing Pung or Kang.
+   * Nobody is timed for answering a discard at either kind of table. The one thing a clock still
+   * means here is how long the rest of the table has to call over a call that has been made.
    */
   private readonly liveDeadline = computed(() => {
-    const claim = this.view()?.claim;
-    if (!claim) return null;
-
-    const at = claim.namingDeadlineUtc ?? claim.deadlineUtc;
+    const at = this.view()?.claim?.deadlineUtc;
     return at ? new Date(at).getTime() : null;
   });
 
-  /** Seconds left to answer a discard, floored at zero. Zero when nothing is on a clock. */
+  /** Seconds left before the standing call takes the tile. Zero when nothing is on a clock. */
   protected readonly claimSeconds = computed(() => {
     const deadline = this.liveDeadline();
     if (deadline === null) return 0;
@@ -410,10 +476,7 @@ export class TablePage implements OnDestroy {
     const claim = this.view()?.claim;
     if (!claim || !this.claimTimed()) return 0;
 
-    // Against whichever clock is actually running: the naming clock is a different length from the
-    // window, and a bar drawn against the wrong one empties at the wrong speed.
-    const seconds = claim.namingDeadlineUtc ? claim.namingSeconds : claim.windowSeconds;
-    const window = Math.max(1, seconds || 0);
+    const window = Math.max(1, claim.windowSeconds || 0);
 
     return Math.min(1, Math.max(0, this.claimSeconds() / window));
   });
@@ -424,6 +487,34 @@ export class TablePage implements OnDestroy {
     const last = discards[discards.length - 1];
     return last && !last.claimed ? last : null;
   });
+
+  /**
+   * The thrown tile you can still do something about, or null.
+   *
+   * Drawn with a live outline in the pool and clickable, which is the whole of the answer to a
+   * dialog closed too early. The window is not on a clock, so closing it or looking away is not an
+   * answer and costs nothing: the tile is still on the table, and tapping it opens the calls again.
+   * The outline is the only thing that says so, and it says nothing about what is in your hand -
+   * every seat that has not answered sees it on the same tile.
+   */
+  protected readonly claimableDiscard = computed(() => {
+    const claim = this.view()?.claim;
+    if (!claim || claim.youAnswered) return null;
+
+    const live = this.liveDiscard();
+    return live && live.tile.id === claim.tile.id ? live : null;
+  });
+
+  /**
+   * Reopens the calls off the tile in the pool. Same door as the Options button on the bar.
+   *
+   * Every tile in the pool is wired to this, and only the one still up for a claim opens anything.
+   * The pile is a scroll box of small tiles, so a press landing on a neighbour of the live one is
+   * ordinary; making that press do nothing is better than making the live tile a smaller target.
+   */
+  protected takeLiveDiscard(discard: DiscardView): void {
+    if (this.claimableDiscard()?.tile.id === discard.tile.id) this.openClaimDialog();
+  }
 
   // ---------------------------------------------------------------- the claim window
 
@@ -436,6 +527,80 @@ export class TablePage implements OnDestroy {
   protected readonly candidates = computed<ClaimCandidateView[]>(
     () => this.pendingClaim()?.candidates ?? [],
   );
+
+  /**
+   * Your own call after a stronger one took the tile off you. The window answered for you, so the
+   * strip above has nothing left to offer - but going quiet at that moment is exactly what made a
+   * chow look like it had been eaten, so the strip says what beat it instead.
+   */
+  protected readonly outrankedClaim = computed<ClaimPromptView | null>(() => {
+    const claim = this.view()?.claim;
+    return claim?.outranked ? claim : null;
+  });
+
+  /** What the other two answering seats have said. Empty when no window is open. */
+  protected readonly calls = computed<SeatCallView[]>(() => this.view()?.claim?.calls ?? []);
+
+  /**
+   * The call the rest of the table is now answering to. A finished one first, because that is the
+   * one that has actually taken the tile; only one seat can ever pung or kang a given face, so
+   * there is never a second finished call to weigh this one against.
+   */
+  protected readonly standingCall = computed<SeatCallView | null>(
+    () =>
+      this.calls().find((c) => c.state === 'Called') ??
+      this.calls().find((c) => c.state === 'Calling') ??
+      null,
+  );
+
+  /**
+   * One line saying what has happened to the tile and who has still to answer.
+   *
+   * This is the whole fix for a window that used to resolve out of nowhere: a call was being held
+   * silently until the window closed, so a seat could spend a minute building a chow against a
+   * pung that had been made one second after the discard.
+   */
+  protected readonly callLine = computed<string | null>(() => {
+    const standing = this.standingCall();
+
+    if (standing) {
+      const who = this.seatName(standing.seat);
+
+      return standing.state === 'Calling'
+        ? `${who} is calling ${standing.called} - waiting for them to name their tiles`
+        : `${who} called ${standing.called}`;
+    }
+
+    const waiting = this.calls()
+      .filter((c) => c.state === 'Waiting')
+      .map((c) => this.seatName(c.seat));
+
+    return waiting.length ? `Waiting for ${waiting.join(' and ')}` : null;
+  });
+
+  /** A seat's name for a sentence, falling back to the chair for one nobody is sitting in. */
+  protected seatName(seat: number): string {
+    return this.view()?.seats[seat]?.displayName ?? `Seat ${seat + 1}`;
+  }
+
+  /**
+   * Whether a call is still worth pressing. The server works this out from the calls already made
+   * - never from what your hand holds - and refuses anything under them, so a button it would
+   * refuse is shown dead rather than left to fail on the press.
+   */
+  protected kindLive(kind: ClaimKind): boolean {
+    const live = this.pendingClaim()?.liveKinds;
+
+    // No roster at all means a server older than this build. Every call stays live there, which is
+    // how it behaved before any of this existed.
+    return live ? live.includes(kind) : true;
+  }
+
+  /** The seat that threw the tile now up for claim, so the dialog can name it. */
+  protected readonly claimFrom = computed<SeatStateView | null>(() => {
+    const claim = this.pendingClaim();
+    return claim ? (this.view()?.seats[claim.fromSeat] ?? null) : null;
+  });
 
   /** Tiles tapped so far, dropped as soon as a different discard is up. */
   protected readonly claimPicks = computed<number[]>(() => {
@@ -468,11 +633,43 @@ export class TablePage implements OnDestroy {
   // second half is tapping the tiles it costs. Everything below is that second half.
 
   /** The four calls, in the order they outrank each other. Only drawn when assist is off. */
-  protected readonly manualKinds: readonly ClaimKind[] = ['Chow', 'Pung', 'Kang', 'Todas'];
+  private static readonly MANUAL_KINDS: readonly ClaimKind[] = ['Chow', 'Pung', 'Kang', 'Todas'];
+
+  /**
+   * The calls worth putting in front of the player on this discard.
+   *
+   * Chow comes off the list for a tile nobody in this chair could chow whatever they were holding:
+   * a wind or a dragon, or a tile thrown by anyone other than the player immediately before you.
+   * That is not about the hand - it is on the table for all four to see - so hiding the button
+   * gives nothing away, and leaving it there would be worse than useless: with assist off, a
+   * refusal is the only answer the player ever gets, and "not from that seat" and "not with those
+   * tiles" would arrive looking exactly alike.
+   */
+  protected readonly callKinds = computed<readonly ClaimKind[]>(() => {
+    const chow = this.pendingClaim()?.chowPossible ?? false;
+    return TablePage.MANUAL_KINDS.filter((kind) => kind !== 'Chow' || chow);
+  });
 
   /** What you have pressed and still owe tiles for, or null. */
   protected readonly pressedKind = computed<ClaimKind | null>(
     () => this.pendingClaim()?.pressedKind ?? null,
+  );
+
+  /**
+   * Your own finished call, while the window is still open on the rest of the table.
+   *
+   * Calling first holds the tile: everybody else is shown who holds it and can only take it with
+   * something that beats it. That has to come with a way out, or a mis-tap owns the tile until the
+   * beat runs out - so the bar keeps offering to let it go for as long as the window is open.
+   */
+  protected readonly yourStandingCall = computed<ClaimPromptView | null>(() => {
+    const claim = this.view()?.claim;
+    return claim?.youClaimed && claim.youAnswered && !claim.outranked ? claim : null;
+  });
+
+  /** What you called, for the line that says the tile is yours unless somebody calls over it. */
+  protected readonly yourCallKind = computed<ClaimKind | null>(
+    () => this.view()?.claim?.yourCall ?? null,
   );
 
   /** How many of your own tiles each call costs. A todas names none: the win is the whole hand. */
@@ -492,18 +689,97 @@ export class TablePage implements OnDestroy {
   });
 
   /** Presses a call without naming any tiles. The dialog then waits for the tiles. */
-  protected pressCall(kind: ClaimKind): void {
+  protected async pressCall(kind: ClaimKind): Promise<void> {
+    const claim = this.pendingClaim();
+    if (!claim) return;
+
+    this.clearRefusal();
+
     // A todas costs nothing out of hand, so there is no second half and it resolves on the press.
-    void this.game.claim(kind, []);
+    if (!(await this.game.claim(kind, []))) this.refuse(kind, claim.tile.id);
+  }
+
+  /**
+   * Lets go of a call, leaving the discard exactly as it was: still there to call something else
+   * on, to pass on, or to draw through - and now reachable by everybody else at the table.
+   *
+   * Two ways in. With assist off, pressing a call is a guess made before counting your own tiles,
+   * because nothing on screen said what the tile was worth; finding nothing to pay with must not
+   * cost you the discard. And at any table, a call holds the tile against the other three until it
+   * resolves, so letting go has to be a thing you can do - otherwise a mistaken call locks the tile
+   * up until it wins.
+   */
+  protected async cancelPress(): Promise<void> {
+    this.clearRefusal();
+    this.clearPicks();
+
+    await this.game.withdraw();
   }
 
   /** Hands over the tiles for the call already pressed. */
-  protected confirmPress(): void {
+  protected async confirmPress(): Promise<void> {
     const kind = this.pressedKind();
-    if (!kind || !this.pickReady()) return;
+    const claim = this.pendingClaim();
 
-    void this.game.claim(kind, this.claimPicks());
+    if (!kind || !claim || !this.pickReady()) return;
+
+    this.clearRefusal();
+
+    if (!(await this.game.claim(kind, this.claimPicks()))) this.refuse(kind, claim.tile.id);
   }
+
+  // ---------------------------------------------------------------- a refusal you can look at
+  //
+  // "Seat 0 cannot declare Pung on C9#107" is the server talking to itself. What the player needs
+  // is the tile they called on and the tiles the call would have taken, drawn the same size as the
+  // ones in their hand, so the mistake is visible rather than described.
+
+  /** The last refusal, held against the discard it was about so it dies with that discard. */
+  private readonly refusedPress = signal<{ discard: number | null; refusal: ClaimRefusal | null }>({
+    discard: null,
+    refusal: null,
+  });
+
+  protected readonly refusal = computed<ClaimRefusal | null>(() => {
+    const held = this.refusedPress();
+    return held.discard === (this.pendingClaim()?.tile.id ?? null) ? held.refusal : null;
+  });
+
+  private clearRefusal(): void {
+    this.refusedPress.set({ discard: null, refusal: null });
+  }
+
+  /**
+   * Turns the server's no into something drawable, when the server named a rule the client can
+   * illustrate. Anything else is left to the floating message, which still carries the sentence.
+   */
+  private refuse(kind: ClaimKind, discard: number): void {
+    const claim = this.pendingClaim();
+    const failure = this.game.lastFailure();
+
+    if (!claim || failure?.code !== 'CannotClaim') return;
+
+    const tile = claim.tile.code;
+    const named = this.label(tile);
+
+    const refusal: ClaimRefusal =
+      kind === 'Todas'
+        ? { text: `${named} does not finish your hand.`, need: [] }
+        : {
+            text: `You cannot ${kind.toLowerCase()} ${named}. That needs ${TablePage.NEED_WORDS[kind]}:`,
+            need: needFor(kind, tile),
+          };
+
+    this.refusedPress.set({ discard, refusal });
+  }
+
+  /** What each call costs, said in words above the tiles that say it in pictures. */
+  private static readonly NEED_WORDS: Record<ClaimKind, string> = {
+    Chow: 'two tiles that run with it, in your hand',
+    Pung: 'two more of the same tile in your hand',
+    Kang: 'three more of the same tile in your hand',
+    Todas: '',
+  };
 
   /** Null when the picked tiles make a legal group, otherwise why they do not. */
   protected readonly pickError = computed<string | null>(() => {
@@ -525,7 +801,9 @@ export class TablePage implements OnDestroy {
       return `Pick one more tile - ${one} on its own does not make a set with ${thrown}.`;
     }
 
-    const names = this.codesOf(picked).map((code) => this.label(code)).join(' and ');
+    const names = this.codesOf(picked)
+      .map((code) => this.label(code))
+      .join(' and ');
     return `That is not a valid move. ${names} cannot make a chow, pung or kang with ${thrown}.`;
   });
 
@@ -589,7 +867,9 @@ export class TablePage implements OnDestroy {
   /** Distinguishes "Chow B3-B4-B5" from "Chow B5-B6-B7" for the specs without reading the label. */
   protected candidateTestId(index: number): string {
     const kind = this.candidates()[index].kind;
-    const nth = this.candidates().slice(0, index).filter((c) => c.kind === kind).length;
+    const nth = this.candidates()
+      .slice(0, index)
+      .filter((c) => c.kind === kind).length;
 
     return nth === 0 ? `claim-${kind}` : `claim-${kind}-${nth + 1}`;
   }
@@ -674,8 +954,53 @@ export class TablePage implements OnDestroy {
 
   protected runMove(move: TurnMove): void {
     this.showMoves.set(false);
+
+    // The tiles are about to leave the hand, so a tile still lifted for a throw is lifted over
+    // nothing. Clearing it here covers all three routes into a declaration at once.
+    this.selected.set(null);
+
     if (move.kind === 'SecretKang') this.secretKang(move.face);
     else this.sagasa(move.face);
+  }
+
+  /** The declaration this face would make on your own turn, or null when it makes none. */
+  private moveForFace(code: string): TurnMove | null {
+    return this.extraMoves().find((move) => move.face === code) ?? null;
+  }
+
+  /**
+   * The declaration the lifted tile would make. The Moves button is the complete list, but it is a
+   * list you have to remember to open: forget the fourth tile arrived and the hand just plays on
+   * three tiles short. Lifting a tile is what a player does when they are thinking about it
+   * anyway, so the offer is put there too - the same tile that says "tap again to throw" says
+   * "or show all four".
+   */
+  protected readonly liftedMove = computed<TurnMove | null>(() => {
+    const id = this.selected();
+    if (id === null || !this.canThrowNow()) return null;
+
+    const tile = (this.me()?.concealed ?? []).find((t) => t.id === id);
+    return tile ? this.moveForFace(tile.code) : null;
+  });
+
+  /**
+   * The declaration a whole block would make: the block holds exactly the four tiles it puts
+   * down, so the group you built by hand - or the one Auto Arrange built for you - is itself the
+   * button. Sagasa never comes through here; three of its four are already on the table.
+   */
+  protected blockMove(block: HandBlock): TurnMove | null {
+    if (block.tiles.length !== 4) return null;
+
+    const face = block.tiles[0].code;
+    if (block.tiles.some((tile) => tile.code !== face)) return null;
+
+    const move = this.moveForFace(face);
+    return move?.kind === 'SecretKang' ? move : null;
+  }
+
+  /** What a declaration button says. Short, because the tiles under it are the rest of it. */
+  protected moveWord(move: TurnMove): string {
+    return move.kind === 'SecretKang' ? 'Show all four' : 'Sagasa';
   }
 
   // ---------------------------------------------------------------- actions
@@ -697,10 +1022,11 @@ export class TablePage implements OnDestroy {
     }
 
     if (this.canThrowNow()) {
-      // First tap lifts the tile so it can be checked, second tap throws it. On a phone there is no
-      // hover and no room for a confirm dialog, and a mis-thrown tile cannot be taken back.
+      // First tap lifts the tile so it can be checked, second tap puts it up to be thrown. The
+      // throw itself waits on the dialog: two taps in the same place is a gesture a thumb makes by
+      // accident, and there is no taking a tile back once the other three have seen it.
       if (this.selected() === tile.id) {
-        this.throwTile(tile.id);
+        this.confirming.set(tile.id);
         return;
       }
 
@@ -715,8 +1041,34 @@ export class TablePage implements OnDestroy {
     if (this.canRegroup()) this.tapArrange(tile);
   }
 
-  /** The one way a tile leaves your hand, whether it was tapped twice or dragged into the pool. */
+  /**
+   * The tile the confirm dialog is asking about, or null when it is not up.
+   *
+   * Resolved out of the hand rather than held as a copy, so a tile that leaves some other way -
+   * a sagasa, a hand that ends under it - takes the dialog with it instead of leaving it asking
+   * about something that is no longer there.
+   */
+  protected readonly confirmingTile = computed<TileView | null>(() => {
+    const id = this.confirming();
+    if (id === null || !this.canThrowNow()) return null;
+    return (this.me()?.concealed ?? []).find((tile) => tile.id === id) ?? null;
+  });
+
+  /** Puts the tile back down. The discard step is exactly where it was: nothing has been sent. */
+  protected cancelDiscard(): void {
+    this.confirming.set(null);
+    this.selected.set(null);
+  }
+
+  /** The answer that actually throws it. */
+  protected confirmDiscard(): void {
+    const id = this.confirming();
+    if (id !== null) this.throwTile(id);
+  }
+
+  /** The one way a tile leaves your hand, whether it was confirmed or dragged into the pool. */
   private throwTile(tileId: number): void {
+    this.confirming.set(null);
     this.selected.set(null);
     this.showMoves.set(false);
 
@@ -732,6 +1084,10 @@ export class TablePage implements OnDestroy {
     });
   }
 
+  private clearPicks(): void {
+    this.picks.set({ discard: null, ids: [] });
+  }
+
   private togglePick(tileId: number): void {
     const discard = this.pendingClaim()?.tile.id ?? null;
     const current = this.claimPicks();
@@ -743,46 +1099,99 @@ export class TablePage implements OnDestroy {
   }
 
   /** Takes the discard with exactly the tiles the candidate names. */
-  protected claimWith(candidate: ClaimCandidateView): void {
-    void this.game.claim(candidate.kind, [...candidate.tileIds]);
+  protected async claimWith(candidate: ClaimCandidateView): Promise<void> {
+    const claim = this.pendingClaim();
+    if (!claim) return;
+
+    this.clearRefusal();
+
+    if (!(await this.game.claim(candidate.kind, [...candidate.tileIds])))
+      this.refuse(candidate.kind, claim.tile.id);
   }
 
   /** Takes the discard with the tiles the player picked by hand. */
-  protected takePick(): void {
+  protected async takePick(): Promise<void> {
     const match = this.pickMatch();
-    if (!match) return;
+    const claim = this.pendingClaim();
 
-    void this.game.claim(match.kind, this.claimPicks());
+    if (!match || !claim) return;
+
+    this.clearRefusal();
+
+    if (!(await this.game.claim(match.kind, this.claimPicks())))
+      this.refuse(match.kind, claim.tile.id);
   }
 
   protected pass(): void {
     void this.game.pass();
   }
 
+  // ---------------------------------------------------------------- taking a tile off the wall
+  //
+  // Drawing is a button now, and the button is always on the bar. It used to happen by itself the
+  // moment the turn came round, on the reasoning that there is only ever one thing you can do -
+  // which is true of the rules and false of the person: the tile landed in a sorted hand while
+  // they were still looking at what the last player threw, and the one card in the game they are
+  // owed a good look at went past unseen. Bots still draw by themselves, because nobody is
+  // watching a bot's hand.
+
+  /** The ordinary draw: your turn has come round and the wall is where your next tile is. */
+  protected readonly myDrawTurn = computed(() => {
+    const view = this.view();
+    return !!view && view.phase === 'AwaitingDraw' && view.currentSeat === view.yourSeat;
+  });
+
   /**
-   * Whether this seat can end the claim window by taking its turn.
+   * Whether this seat can end an open claim window by taking its turn early.
    *
-   * Only where nothing else would end it: an unassisted window on a human's discard, which has no
-   * deadline at all. A bot's discard carries one, so the game moves on by itself and the button
-   * would be clutter. Only the seat due to play next, which is who picks up if the tile goes dead.
+   * Only where nothing else would end it - a window with no deadline - and only for the seat due
+   * to play next, which is who picks up when the tile goes dead. Drawing gives up whatever you
+   * have called, so it is not offered to somebody who has called something: pass first.
    */
   protected readonly canDrawThrough = computed(() => {
     const view = this.view();
-    if (!view || this.assisted() || !view.claim) return false;
+    if (!view?.claim || view.claim.deadlineUtc || view.claim.youClaimed) return false;
 
-    // Something is already counting down towards closing this window.
-    if (view.claim.deadlineUtc) return false;
-
-    // Drawing gives up whatever you have called, so it is not offered to somebody who has called
-    // something. Pass first if you have changed your mind.
-    if (view.claim.youClaimed) return false;
+    // Somebody else is part way through a call. The server refuses a draw that would cut across
+    // it, so the button must not appear to offer one either. Read defensively: a server that has
+    // not been restarted onto this build sends no roster at all, and the button going dead is a
+    // better failure there than the whole view throwing.
+    if (this.calls().some((c) => c.state === 'Calling')) return false;
 
     return (view.currentSeat + 1) % 4 === view.yourSeat;
   });
 
-  /** Gives up on the discard and takes a tile off the wall, which kills the window. */
-  protected drawInstead(): void {
-    void this.game.drawInstead();
+  /** Whether the Draw button does anything right now. It is on the bar either way. */
+  protected readonly canDraw = computed(() => this.myDrawTurn() || this.canDrawThrough());
+
+  /**
+   * What the button means this instant. Three answers, not two: the button sits there dead for
+   * most of the game, and a dead button whose label explains the one thing it is not doing right
+   * now is worse than one that says why it is dead.
+   */
+  protected readonly drawHint = computed(() => {
+    if (this.myDrawTurn()) return 'Take your tile from the wall';
+
+    if (this.canDrawThrough())
+      return 'Give up on that discard and take a tile from the wall instead';
+
+    const view = this.view();
+
+    if (view?.claim) {
+      if (view.claim.youClaimed) return 'You have called on that tile - take the call back first';
+
+      const naming = this.calls().find((c) => c.state === 'Calling');
+      if (naming) return `${this.seatName(naming.seat)} is still naming their tiles`;
+
+      return `${this.seatName((view.currentSeat + 1) % 4)} is the one who can draw through this`;
+    }
+
+    return view ? `${this.seatName(view.currentSeat)} is playing` : 'Not yours to take yet';
+  });
+
+  protected draw(): void {
+    if (!this.canDraw()) return;
+    void this.game.draw();
   }
 
   protected secretKang(face: string): void {
@@ -822,7 +1231,11 @@ export class TablePage implements OnDestroy {
       const word = GROUP_WORD[group.kind];
 
       const label =
-        group.kind === 'Partial' ? `needs ${group.needs.join('/')}` : group.kind === 'Floater' ? '' : word;
+        group.kind === 'Partial'
+          ? `needs ${group.needs.join('/')}`
+          : group.kind === 'Floater'
+            ? ''
+            : word;
 
       const ariaLabel =
         group.kind === 'Partial'
@@ -876,7 +1289,8 @@ export class TablePage implements OnDestroy {
     });
 
     const loose = tiles.filter((tile) => !grouped.has(tile.id));
-    if (loose.length) blocks.push({ key: 'all', kind: 'all', tiles: loose, label: '', ariaLabel: '' });
+    if (loose.length)
+      blocks.push({ key: 'all', kind: 'all', tiles: loose, label: '', ariaLabel: '' });
 
     return blocks;
   }
@@ -896,7 +1310,7 @@ export class TablePage implements OnDestroy {
 
   protected readonly draggedTile = computed<TileView | null>(() => {
     const id = this.dragged();
-    return id === null ? null : (this.me()?.concealed ?? []).find((t) => t.id === id) ?? null;
+    return id === null ? null : ((this.me()?.concealed ?? []).find((t) => t.id === id) ?? null);
   });
 
   /** Whether throwing a tile is legal this instant. Both routes to a throw check this one thing. */
@@ -918,18 +1332,35 @@ export class TablePage implements OnDestroy {
     return this.manualGroups().some((group) => group.includes(tileId));
   }
 
-  /** Moves a tile into the group the target is in, starting one if the target is loose. */
-  private joinInto(movedId: number, targetId: number): void {
+  /** Which side of this tile the drop would land on, so the template can draw the gap opening. */
+  protected dropSide(tileId: number): 'before' | 'after' | null {
+    const slot = this.dropTarget();
+    if (!slot || slot.id !== tileId) return null;
+    return slot.before ? 'before' : 'after';
+  }
+
+  /**
+   * Puts a tile in the gap on one side of another tile: into that tile's group at that exact
+   * position, or starting a new group of the two when the target is loose. Taking the tile out of
+   * wherever it was first is what makes a move inside one group work - drop the third tile of a run
+   * between the first two and the group is rebuilt around the gap, not appended to.
+   */
+  private insertNear(movedId: number, targetId: number, before: boolean): void {
     if (movedId === targetId) return;
 
     const without = this.manualGroups().map((group) => group.filter((id) => id !== movedId));
     const at = without.findIndex((group) => group.includes(targetId));
 
-    this.setGroups(
-      at >= 0
-        ? without.map((group, i) => (i === at ? [...group, movedId] : group))
-        : [...without, [targetId, movedId]],
-    );
+    if (at < 0) {
+      this.setGroups([...without, before ? [movedId, targetId] : [targetId, movedId]]);
+      return;
+    }
+
+    const group = [...without[at]];
+    const index = group.indexOf(targetId);
+    group.splice(before ? index : index + 1, 0, movedId);
+
+    this.setGroups(without.map((existing, i) => (i === at ? group : existing)));
   }
 
   private ungroup(tileId: number): void {
@@ -959,7 +1390,13 @@ export class TablePage implements OnDestroy {
     if (event.pointerType === 'mouse' && event.button !== 0) return;
 
     const el = event.currentTarget as HTMLElement;
-    this.press = { x: event.clientX, y: event.clientY, id: tile.id, pointerId: event.pointerId, el };
+    this.press = {
+      x: event.clientX,
+      y: event.clientY,
+      id: tile.id,
+      pointerId: event.pointerId,
+      el,
+    };
 
     // Captured here rather than once the drag arms, so the whole gesture is guaranteed to arrive
     // on this tile. Waiting for the threshold means a quick flick that leaves the tile before the
@@ -998,9 +1435,9 @@ export class TablePage implements OnDestroy {
         // because it was let go over a pool that could not take it would be worse than nothing.
         if (this.canThrowNow()) this.throwTile(press.id);
       } else if (this.canRegroup()) {
-        // Onto another tile joins its group; let go anywhere else in your own area takes it out of
-        // the one it was in.
-        if (target !== null) this.joinInto(press.id, target);
+        // Onto a gap beside another tile drops it there; let go anywhere else in your own area
+        // takes it out of the group it was in.
+        if (target) this.insertNear(press.id, target.id, target.before);
         else this.ungroup(press.id);
       }
 
@@ -1028,7 +1465,7 @@ export class TablePage implements OnDestroy {
    * Where a dragged tile would land if it were let go right now. The ghost never answers: it is
    * `pointer-events: none`, so the thing under the pointer is the thing the player is aiming at.
    */
-  private dropAt(x: number, y: number, movedId: number): { pool: boolean; tile: number | null } {
+  private dropAt(x: number, y: number, movedId: number): { pool: boolean; tile: DropSlot | null } {
     const el = document.elementFromPoint(x, y);
     if (!el) return { pool: false, tile: null };
 
@@ -1038,7 +1475,13 @@ export class TablePage implements OnDestroy {
     if (!button) return { pool: false, tile: null };
 
     const id = Number(button.dataset['tileId']);
-    return { pool: false, tile: Number.isFinite(id) && id !== movedId ? id : null };
+    if (!Number.isFinite(id) || id === movedId) return { pool: false, tile: null };
+
+    // Which half of the tile the pointer is over decides which of the two gaps beside it is meant.
+    // Halves rather than a narrower edge strip: every point over a tile has to answer, or there
+    // would be dead middles where a drag says nothing at all.
+    const box = button.getBoundingClientRect();
+    return { pool: false, tile: { id, before: x < box.left + box.width / 2 } };
   }
 
   // ---------------------------------------------------------------- grouping by tap
@@ -1059,8 +1502,28 @@ export class TablePage implements OnDestroy {
       return;
     }
 
-    this.joinInto(held, tile.id);
+    // A tap has no side to it, so it lands the tile after the one that was tapped - the end of
+    // that group when the tap was on its last tile, which is what "group these two" reads as.
+    this.insertNear(held, tile.id, false);
     this.held.set(null);
+  }
+
+  /**
+   * Puts the hand back in plain suit-and-rank order with nothing grouped.
+   *
+   * The tiles are always drawn in that order, so what this actually undoes is the grouping: the
+   * blocks you pushed together by hand, and Auto Arrange if it was doing the pushing. One button
+   * for "start again from a tidy hand", which is what a player means when they say sort.
+   */
+  protected sortHand(): void {
+    this.held.set(null);
+    this.endDrag();
+    this.setGroups([]);
+
+    if (this.arrangePreference()) {
+      this.arrangePreference.set(false);
+      writeFlag(ARRANGE_KEY, false);
+    }
   }
 
   protected toggleArrange(): void {
@@ -1122,14 +1585,44 @@ export class TablePage implements OnDestroy {
     if (!outcome) return '';
 
     if (outcome.reason === 'WallExhausted') return 'Drawn hand - the wall ran out';
-    if (outcome.winnerSeat === view.yourSeat) return outcome.reason === 'Bisaklat' ? 'Bisaklat!' : 'Todas! You win';
+    if (outcome.winnerSeat === view.yourSeat)
+      return outcome.reason === 'Bisaklat' ? 'Bisaklat!' : 'Todas! You win';
 
-    const name = outcome.winnerSeat !== null ? view.seats[outcome.winnerSeat].displayName : 'Somebody';
+    const name =
+      outcome.winnerSeat !== null ? view.seats[outcome.winnerSeat].displayName : 'Somebody';
     return `${name} declared todas`;
   }
 }
 
 /** Suit then rank, so a hand and a claim combination both read in the order players expect. */
+/**
+ * The tiles from your own hand a call would have taken, as rows: one row for a pung or a kang,
+ * one row per run for a chow, because a suited tile sits in up to three different runs and which
+ * of them the player was missing is exactly what they need to see.
+ */
+function needFor(kind: ClaimKind, tile: string): string[][] {
+  if (kind === 'Pung') return [[tile, tile]];
+  if (kind === 'Kang') return [[tile, tile, tile]];
+  if (kind !== 'Chow') return [];
+
+  const suit = tile[0];
+  const rank = Number(tile.slice(1));
+
+  if (!SUITED.includes(suit) || !Number.isFinite(rank)) return [];
+
+  // The three windows a run can put this tile in: at the top, in the middle, at the bottom.
+  return [
+    [rank - 2, rank - 1],
+    [rank - 1, rank + 1],
+    [rank + 1, rank + 2],
+  ]
+    .filter((pair) => pair.every((r) => r >= 1 && r <= 9))
+    .map((pair) => pair.map((r) => `${suit}${r}`));
+}
+
+/** Suit letters that make runs. Winds and dragons do not, which is why they never offer a chow. */
+const SUITED = 'DBC';
+
 function compareCodes(a: string, b: string): number {
   const suit = (SUIT_ORDER[a[0]] ?? 9) - (SUIT_ORDER[b[0]] ?? 9);
   return suit !== 0 ? suit : Number(a.slice(1)) - Number(b.slice(1));

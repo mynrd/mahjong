@@ -32,6 +32,46 @@ test.describe('creating a table and sitting down', () => {
     await closeAll([host, guest]);
   });
 
+  test('a player joins from the start page by typing the code', async ({ browser }) => {
+    const { host, code } = await createRoom(browser);
+
+    const context = await browser.newContext();
+    const page = await context.newPage();
+
+    await page.goto('/');
+    await page.getByTestId('mode-join').click();
+
+    // Typed the way a code gets read out across the room: lower case, with a space in it.
+    const spoken = `${code.slice(0, 3)} ${code.slice(3)}`.toLowerCase();
+    await page.getByTestId('join-code-input').fill(spoken);
+    await page.getByTestId('join-name').fill('Ate Rose');
+    await page.getByTestId('join-password').fill(PASSWORD);
+    await page.getByTestId('join-submit').click();
+
+    await expect(page).toHaveURL(new RegExp(`/room/${code}$`));
+    await expect(page.getByTestId('seat-1-name')).toHaveText('Ate Rose');
+
+    await context.close();
+    await host.context.close();
+  });
+
+  test('a made-up code typed on the start page is refused', async ({ browser }) => {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+
+    await page.goto('/');
+    await page.getByTestId('mode-join').click();
+    await page.getByTestId('join-code-input').fill('ZZZZZZ');
+    await page.getByTestId('join-name').fill('Nobody');
+    await page.getByTestId('join-password').fill(PASSWORD);
+    await page.getByTestId('join-submit').click();
+
+    await expect(page.getByTestId('join-error')).toContainText('ZZZZZZ');
+    await expect(page).toHaveURL(/\/$/);
+
+    await context.close();
+  });
+
   test('the wrong password is refused', async ({ browser }) => {
     const { host, code } = await createRoom(browser);
 
@@ -58,7 +98,7 @@ test.describe('creating a table and sitting down', () => {
     const page = await context.newPage();
 
     await page.goto('/join/ZZZZZZ');
-    await expect(page.getByTestId('join-error')).toContainText('No table');
+    await expect(page.getByTestId('join-lookup-error')).toContainText('No table');
 
     await context.close();
   });

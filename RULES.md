@@ -79,14 +79,79 @@ A hand held by a player is always 16 tiles between turns, 17 at the moment of de
    - If it is a bonus tile: expose it, draw a replacement from the flower wall, repeat.
 2. Current player may declare **todas** (win), **secret kang**, or **sagasa**.
 3. Otherwise they discard 1 tile.
-4. The discard is open for claims for a short window **(configurable, default 6s)**.
-   Every other player may claim, pass, or time out (treated as pass).
-5. If nobody claims, turn passes to the next seat. The discard becomes dead once the next
-   player draws.
+4. The discard is open for claims. **Every** discard is, including one nobody can use: the window
+   opening is how the tile is put in front of the other three, so a window that only opened when
+   somebody could claim would be announcing that somebody could.
+5. Every other player answers it - claim, or Pass. The tile does not move until all three have
+   answered, until a call already made on it takes it, or until the next seat draws.
+6. Then the turn passes to the next seat, who takes a tile from the wall.
 
-Steps 4 and 5 change at a table with **Allow Helper** off. See section 3.1.
+Nobody is ever timed for answering a discard. Step 5 also changes at a table with **Allow Helper**
+off. See sections 3.1 to 3.3.
 
-### 3.1 Allow Helper **(configurable, default: on)**
+### 3.1 Who draws, and when
+
+A player's own draw is a button press, never automatic. There is only ever one thing a player can
+do at the start of their turn, so the tile used to arrive by itself - and it arrived in a sorted
+hand while they were still looking at what the last player threw, which meant the one tile in the
+game they are owed a good look at went past unseen. **Draw** sits on the action bar all game, live
+only when the wall is theirs to take from.
+
+Bots draw by themselves. Nobody is watching a bot's hand.
+
+### 3.2 The claim window has no clock
+
+**Nobody is timed for answering a discard.** Whoever threw it, whatever the helper is set to, a
+thrown tile stays claimable until it is claimed or the next seat draws. Closing the dialog, looking
+away, or looking at your own hand for a minute costs nothing.
+
+This is the one rule here that is not the real game's. A six-second window used to run from the
+throw, and a player who glanced away was out of the discard with nothing on screen to say why and
+nothing but **Draw** left to press. At a table you can still call the tile as long as it is lying
+there, so that is what the app does now.
+
+**The tile in the pool is the way back in.** The last thrown tile is drawn with a halo for every
+seat that has not answered, and pressing it opens the calls again. The halo says only that the tile
+is unanswered - it is the same halo on every screen, and says nothing about what any hand holds.
+
+Three things end a window, and none of them is a clock on answering:
+
+| What ends it | When |
+|---|---|
+| Every other seat answers | Claim or Pass from all three |
+| A **call already made** takes the tile | **6s (configurable)** after that call - see 3.2.1 |
+| The **next seat draws** | Whenever that seat decides to pick up |
+
+A bot sitting in the next seat waits **20 seconds (configurable)** from the discard and then draws.
+Since nothing else paces a window nobody answers, that is the number that decides how long a table
+with a bot in it sits on a thrown tile.
+
+Seats holding nothing are not answered for. A bot is - there is no screen to show it the tile on -
+but a person always answers for themselves, whatever they are holding. A window that closed by
+itself the instant it opened would be the server saying "nothing here for you", which is the one
+sentence 3.3 exists to stop it saying.
+
+#### 3.2.1 Calling holds the tile
+
+Calling is the one thing that does start a clock, and it starts it for the rest of the table rather
+than for the caller.
+
+- The first seat to make a **finished** call - pressed and paid for - holds the tile. The other
+  three are told who holds it and what they called, the way a call at a table is shouted rather
+  than whispered.
+- They then have **6 seconds (configurable)** to call something that **beats** it (4.1). Nothing at
+  or under it is worth pressing and the app says so on the buttons.
+- When those seconds run out the tile goes to whoever is standing highest. Seats that never
+  answered are read as having let it go: they heard the call and said nothing over it.
+- The seat holding it can **let it go** at any point before then. The tile is back on the table,
+  nothing is timing it, and every seat that was answered for on account of that call is waiting on
+  the tile again. Without this a mis-tap owns the tile until it wins.
+- A **half-made** call - pressed with the tiles not yet named, which only happens with the helper
+  off - starts nothing and outlives everything. Nobody can take the tile while somebody is still
+  counting their own tiles against it, including a finished call whose 6 seconds have run out. Only
+  the seat that pressed can end it, by naming the tiles or letting the call go.
+
+### 3.3 Allow Helper **(configurable, default: on)**
 
 Chosen when the table is created and fixed for every hand played at it.
 
@@ -94,46 +159,39 @@ Chosen when the table is created and fixed for every hand played at it.
 arrives with the exact groups you could build, your own tiles are outlined by what they could be
 used for, and Auto Arrange lays your hand out in blocks.
 
-**Off.** The server says none of that. All three seats get the same four buttons on every discard,
+**Off.** The server says none of that. All three seats get the same buttons on every discard,
 whether or not they can use it, and nobody is shown a grouping. Reading your own hand is the game.
 
-Because nobody is told what a discard is worth, nobody is timed for failing to spot it:
+The one thing the table still leaves out is **Chow**, and only where the rules could never allow one
+whatever the hand held: a wind or a dragon, or a tile thrown by anyone other than the player
+immediately before you (4.1). Both of those are on the table for all four players to see, so hiding
+the button says nothing about anybody's tiles - and a chow that completes a hand is unaffected,
+because that is claimed as **Todas**, which is always offered.
 
-- A discard from **another player** has **no deadline**. It stays open until every seat that can act
-  has answered.
-- The discard dies when the **next seat draws**, exactly as at a real table. That is the only thing
-  that ends a window nobody wanted, and it is a move that seat was going to make anyway.
-- A discard from a **bot** does get a deadline, **10 seconds** **(configurable)**. Around a real
-  table somebody says "your turn, taking it or not"; nobody says that when the tile came from a bot,
-  so that window is bounded instead. Answering closes it sooner: once every seat has pressed a call
-  or Pass, play moves on immediately rather than sitting out the rest of the ten seconds.
-- That deadline only bounds **noticing** the tile. A seat that presses pung or kang before it runs
-  out still gets its full 10 seconds to name the tiles, and the window waits for it.
+Because nobody is told what a discard is worth, a claim here is made in two acts:
+
 - Pressing a button is only half a claim. The other half is tapping the tiles it costs.
-- Pressing **Pung** or **Kang** starts a **10 second** clock **(configurable)** to name those tiles.
-  Miss it and the claim is dropped and the tile falls to whoever was ranked under it. **Chow** has
-  no clock, because nothing is ranked under a chow waiting to be let through.
-- **One press per seat per discard.** A pung or kang you let run out cannot be pressed again, and
-  you are out of that discard entirely. Without this a seat could press and lapse on a loop and hold
-  the table open forever. Declaring **todas** is the one exception, since it names no tiles and so
-  resolves on the spot.
-- The next seat cannot draw through a naming clock that is still running. The wait is at most those
-  10 seconds.
+- **Neither act is timed.** The press holds the tile, and the seat that made it counts its own
+  tiles against the discard for as long as that takes. Pressing Pung and then finding nothing to
+  pay with is an ordinary mistake at a table where nothing was spelled out, and it must not cost
+  the discard.
+- A press can be **switched** to a different call, or **taken back** outright. Taking it back puts
+  the seat exactly where it was before pressing - free to call something else, to pass, or to draw
+  - and hands the tile straight to anything ranked underneath.
+- The next seat **cannot draw through** a press somebody is still paying for. Nothing bounds that
+  wait, which is the trade this setting makes: the table waits for the person, not the clock.
 
 Priority is unchanged and does not care who pressed first: a pung declared forty seconds late still
-beats a chow that was completed at second nine. See section 4.1.
+beats a chow that was completed at second nine. What being first does buy is the hold in 3.2.1 -
+once a call is *finished*, the rest of the table has one beat to answer it. See section 4.1.
 
 Bots claim the same way at both kinds of table: they work out the group and name its tiles in one
-move, so there is no press for them to leave half finished. What is different is the waiting. A bot
-sitting in the seat due to play next waits **20 seconds** **(configurable)** from the discard and
-then draws, ending the window. That covers the case the 10 seconds above does not: a *human* threw
-the tile, so there is no deadline, and one human who stopped answering would otherwise freeze the
-table for good, because a bot that has already passed has nothing else it will ever do. It does not
-draw through a naming clock that is still running.
+move, so there is no press for them to leave half finished. What is different is the waiting - see
+the 20 seconds in 3.2. A bot does not draw through a call somebody is still paying for.
 
-A human who walks away can still stall an unassisted table indefinitely, if the seat due to play
-next is theirs. That is accepted: a human who never discards already stalls any table, assisted or
-not, and the game has no turn clock.
+A human who walks away can still stall a table indefinitely, if the seat due to play next is
+theirs. That is accepted: a human who never discards already stalls any table, and the game has no
+turn clock.
 
 ---
 
@@ -231,4 +289,4 @@ Recorded so they are not mistaken for bugs. Each is a config flag, defaulted to 
 5. **Money values** - all three sources differ. Defaults above use "units", not pesos, and the
    room owner sets the unit value.
 6. **Allow Helper** - not a rules conflict but a table setting, since a physical table has no
-   helper at all. Default: on, because a first-time player cannot read a hand yet. See section 3.1.
+   helper at all. Default: on, because a first-time player cannot read a hand yet. See section 3.3.

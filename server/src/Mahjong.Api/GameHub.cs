@@ -100,6 +100,9 @@ public sealed class GameHub(
 
     public Task<Result> Pass() => Move(new GameMove.Pass());
 
+    /// <summary>Takes back a call pressed but not yet paid for. Only ever needed with assist off.</summary>
+    public Task<Result> Withdraw() => Move(new GameMove.Withdraw());
+
     public Task<Result> DeclareSecretKang(string face) => Move(new GameMove.SecretKang(face));
 
     public Task<Result> DeclareSagasa(string face) => Move(new GameMove.Sagasa(face));

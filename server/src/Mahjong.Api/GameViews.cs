@@ -66,42 +66,92 @@ public sealed record ClaimCandidateView(
 /// tile claimable as either a chow or a pung produces two entries, and two possible chows produce
 /// two entries. Highest-ranked kind first.
 /// </param>
-/// <param name="DeadlineUtc">Null at an assist-off table, where the window has no deadline.</param>
+/// <param name="DeadlineUtc">
+/// When the call standing on the tile takes it, or null while nobody has called on it - which is
+/// the normal state of a window, because no seat is ever timed for answering a discard.
+/// </param>
 /// <param name="PressedKind">
 /// Assist off: what this seat has pressed and is still naming tiles for. The dialog stays open on
-/// it until the tiles are named or <paramref name="NamingDeadlineUtc"/> passes.
-/// </param>
-/// <param name="NamingDeadlineUtc">
-/// When the press above is dropped for taking too long. Set for a pung or kang, null for a chow,
-/// which is not on a clock.
-/// </param>
-/// <param name="Burned">
-/// This seat pressed pung or kang and never named the tiles in time. It is out of this discard and
-/// its buttons are dead.
+/// it until the tiles are named or the call is let go. Nothing is counting against it.
 /// </param>
 /// <param name="YouClaimed">
 /// This seat has a claim on the tile, finished or half made. Distinct from <paramref name="YouAnswered"/>,
 /// which is also true of a plain pass: the client needs the difference to know whether offering to
 /// draw through the window would be throwing away something the player already called.
 /// </param>
+/// <summary>Where one seat has got to on the open discard, as much of it as the table can hear.</summary>
+public enum SeatCallState
+{
+    /// <summary>Has not answered yet. This is who the table is waiting on.</summary>
+    Waiting,
+
+    /// <summary>Said they do not want it.</summary>
+    Passed,
+
+    /// <summary>Has called, and is still choosing which of their tiles it costs.</summary>
+    Calling,
+
+    /// <summary>Has called and named the tiles. Nothing under this can take the discard now.</summary>
+    Called,
+
+    /// <summary>Called something a stronger call beat, and was answered for.</summary>
+    Outranked,
+
+}
+
+/// <summary>
+/// One seat's public part in the open claim window. The kind is sent whenever there is one, for the
+/// same reason a call is shouted rather than whispered: the three seats that did not make it have
+/// to know it happened before they spend the window answering a tile that is already gone.
+/// </summary>
+public sealed record SeatCallView(int Seat, SeatCallState State, ClaimKind? Called);
+
 public sealed record ClaimPromptView(
     TileView Tile,
     int FromSeat,
     DateTimeOffset? DeadlineUtc,
     /// <summary>
-    /// How long the window was when it opened. The deadline alone says when time runs out but not
-    /// how much there was, and a countdown bar needs both to know how full to draw itself. Sent
-    /// rather than assumed, because the length is a house rule and a table can set it to anything.
+    /// How long the beat above was when it started. The deadline alone says when the tile goes but
+    /// not how much time there was, and a countdown bar needs both to know how full to draw itself.
+    /// Sent rather than assumed, because the length is a house rule a table can set to anything.
     /// </summary>
     int WindowSeconds,
     IReadOnlyList<ClaimKind> YourOptions,
     IReadOnlyList<ClaimCandidateView> Candidates,
     bool YouAnswered,
     ClaimKind? PressedKind,
-    DateTimeOffset? NamingDeadlineUtc,
-    int NamingSeconds,
-    bool Burned,
-    bool YouClaimed);
+    /// <summary>
+    /// What this seat has called on the tile, half made or finished, or null if it has not called.
+    /// The bar says it back while the window is open, next to the way out of it: a call holds the
+    /// tile against the other three, so the seat holding it has to be able to see that it does.
+    /// </summary>
+    ClaimKind? YourCall,
+    bool YouClaimed,
+    /// <summary>
+    /// Your own call was beaten by a stronger one before the window closed, so you were answered
+    /// for. Sent alongside <paramref name="YouAnswered"/> rather than folded into it, because
+    /// "you passed" and "a pung took it off you" are the same fact to the engine and nothing
+    /// like the same thing to the person who had been choosing tiles.
+    /// </summary>
+    bool Outranked,
+    /// <summary>
+    /// The calls still worth pressing. Everything at or under a call already made out loud is left
+    /// out: rank arithmetic over what the whole table heard, never a reading of your hand.
+    /// </summary>
+    IReadOnlyList<ClaimKind> LiveKinds,
+    /// <summary>
+    /// What each other seat has said about this discard, in the order they sit. A call at a real
+    /// table is shouted and everybody hears it at once; sending this is what stops the server
+    /// holding one silently while somebody else builds a group that cannot beat it.
+    /// </summary>
+    IReadOnlyList<SeatCallView> Calls,
+    /// <summary>
+    /// Whether a chow off this tile is open to this seat by position and by the tile itself, which
+    /// is public: everybody can see the tile and who threw it. What the hand holds does not come
+    /// into it, so it is sent even at a table with assist off - and there it is the only thing that
+    /// keeps the Chow button off a tile no seat in this chair could ever chow.
+    /// </summary>
+    bool ChowPossible);
 
 /// <summary>What the player whose turn it is may do right now.</summary>
 public sealed record TurnOptionsView(
@@ -231,24 +281,18 @@ public static class GameViewBuilder
 
         var assisted = state.Rules.AssistEnabled;
 
-        // Assist on, the prompt is only worth sending to a seat that could do something with the
-        // tile. Assist off, it goes to all three: which of them can act is exactly what the server
-        // is not saying, and a prompt that only appeared for the seats holding a pair would say it.
+        // Assist on, what this seat could build with the tile. Assist off, nothing: working that
+        // out is the game. Either way the prompt itself goes to all three seats, so that a prompt
+        // arriving never means "there is something here for you".
         var candidates = assisted
             ? MahjongGame.ClaimCandidates(state, pending.Tile, pending.FromSeat, forSeat)
             : [];
 
-        if (assisted && candidates.Count == 0) return null;
-
         pending.Declared.TryGetValue(forSeat, out var mine);
-        pending.NamingDeadline.TryGetValue(forSeat, out var namingBy);
 
         // A seat part way through a press has not answered: the dialog has to stay up, because
-        // naming the tiles is the half of the answer it still owes. The server's own pass on a seat
-        // holding nothing is not an answer either, for the reason on PendingClaim.AutoPassed.
-        var answered =
-            (pending.Passed.Contains(forSeat) && !pending.AutoPassed.Contains(forSeat))
-            || mine is { AwaitingTiles: false };
+        // naming the tiles is the half of the answer it still owes.
+        var answered = pending.Passed.Contains(forSeat) || mine is { AwaitingTiles: false };
 
         return new ClaimPromptView(
             TileView.Of(pending.Tile),
@@ -266,10 +310,48 @@ public static class GameViewBuilder
                 .ToList(),
             answered,
             mine is { AwaitingTiles: true } ? mine.Kind : null,
-            namingBy == default ? null : namingBy,
-            state.Rules.ClaimFulfilSeconds,
-            pending.Burned.Contains(forSeat),
-            mine is not null);
+            mine?.Kind,
+            mine is not null,
+            pending.Outranked.Contains(forSeat),
+            MahjongGame.LiveKinds(state, pending, forSeat),
+            BuildCalls(state, pending, forSeat),
+            MahjongGame.ChowPossible(state, pending.Tile, pending.FromSeat, forSeat));
+    }
+
+    /// <summary>
+    /// Where the other two answering seats have got to. The discarder is left out: they threw the
+    /// tile, so they have no answer to give and are waiting on the same people this seat is.
+    ///
+    /// What a seat called is public here on purpose. At a table it is shouted, and the whole reason
+    /// a chow could be built against a pung nobody had mentioned is that the server was holding
+    /// that shout until the window closed.
+    /// </summary>
+    private static IReadOnlyList<SeatCallView> BuildCalls(
+        GameState state, PendingClaim pending, int forSeat)
+    {
+        var calls = new List<SeatCallView>(MahjongGame.Seats - 2);
+
+        for (var seat = 0; seat < MahjongGame.Seats; seat++)
+        {
+            if (seat == forSeat || seat == pending.FromSeat) continue;
+
+            pending.Declared.TryGetValue(seat, out var call);
+
+            // An outranked seat is in Passed as well, so that has to be read first or the reason a
+            // seat is out of the discard is flattened into a plain "no thanks".
+            var progress = call switch
+            {
+                { AwaitingTiles: true } => SeatCallState.Calling,
+                not null => SeatCallState.Called,
+                _ when pending.Outranked.Contains(seat) => SeatCallState.Outranked,
+                _ when pending.Passed.Contains(seat) => SeatCallState.Passed,
+                _ => SeatCallState.Waiting,
+            };
+
+            calls.Add(new SeatCallView(seat, progress, call?.Kind));
+        }
+
+        return calls;
     }
 
     private static TurnOptionsView? BuildTurnOptions(GameState state, int forSeat)

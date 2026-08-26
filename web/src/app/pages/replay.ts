@@ -12,7 +12,7 @@ import {
 } from '../core/models';
 import { ReplaySession } from '../core/replay-session';
 import { Tile, describe } from '../ui/tile';
-import { readError } from './create';
+import { readError } from '../core/errors';
 
 const GROUP_WORD: Record<HandGroupKind, string> = {
   Kang: 'kang',

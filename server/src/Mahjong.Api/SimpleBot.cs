@@ -23,22 +23,23 @@ public static class SimpleBot
     };
 
     /// <summary>
-    /// Whether this bot should end an assist-off claim window by drawing through it.
+    /// Whether this bot should end a claim window nobody answered by drawing through it.
     ///
-    /// Only the seat due to play next can, and only once it has answered for itself and nobody is
-    /// inside their ten seconds to name tiles. Without this a table freezes for good the moment one
-    /// human stops answering: an assist-off window has no deadline, so the only thing that ends it
-    /// is this draw, and a bot that has already passed would otherwise never make another move.
+    /// No window closes on a clock any more, so this draw is the only thing that ever moves a table
+    /// on past a tile the people at it are ignoring. Only the seat due to play next can do it, and
+    /// only once it has answered for itself. Without it a table freezes for good the moment one
+    /// human stops answering, because a bot that has already passed would never move again.
+    ///
+    /// A call of any kind stops it. A finished one is on its own beat and takes the tile when that
+    /// runs out; a half-made one is somebody counting their tiles, and drawing the tile out from
+    /// under them is the thing this whole window is arranged not to do.
     /// </summary>
     private static bool OutOfPatience(GameState state, int seat, DateTimeOffset now)
     {
-        if (state.Rules.AssistEnabled) return false;
         if (state.Pending is not { } pending) return false;
         if (seat != GameState.NextSeat(state.CurrentSeat)) return false;
         if (CanStillAnswer(state, seat)) return false;
-
-        // Somebody is mid-claim. That wait is already bounded, so let it run out on its own.
-        if (pending.NamingDeadline.Count > 0) return false;
+        if (pending.Declared.Count > 0) return false;
 
         return now >= pending.OpenedUtc.AddSeconds(state.Rules.BotPatienceSeconds);
     }

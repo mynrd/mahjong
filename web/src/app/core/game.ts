@@ -5,6 +5,19 @@ import { ClaimKind, MoveResult, PlayerGameView } from './models';
 
 export type ConnectionState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'closed';
 
+/**
+ * Why the last move was refused.
+ *
+ * The code is the server naming the rule rather than describing it, which is what lets the table
+ * draw the refusal instead of printing it: told `CannotClaim` on a pung, the dialog can put up the
+ * two tiles the call would have needed. `detail` is the server's own sentence, for everything the
+ * client has nothing better to say about.
+ */
+export interface MoveFailure {
+  code: string;
+  detail: string;
+}
+
 /** Something that just happened at the table, shown briefly so players can follow along. */
 export interface TableMessage {
   id: number;
@@ -25,16 +38,11 @@ export class Game {
   readonly view = signal<PlayerGameView | null>(null);
   readonly connection = signal<ConnectionState>('idle');
   readonly lastError = signal<string | null>(null);
+  readonly lastFailure = signal<MoveFailure | null>(null);
   readonly messages = signal<TableMessage[]>([]);
 
   private hub: signalR.HubConnection | null = null;
   private messageId = 0;
-
-  /**
-   * Guards the automatic draw. Without it, every state update that arrives while the draw is in
-   * flight would fire another one, and the server would reject the extras noisily.
-   */
-  private drawing = false;
 
   async connect(token: string): Promise<void> {
     await this.disconnect();
@@ -49,10 +57,7 @@ export class Game {
       .configureLogging(signalR.LogLevel.Warning)
       .build();
 
-    hub.on('StateChanged', (view: PlayerGameView) => {
-      this.view.set(view);
-      void this.autoDraw(view);
-    });
+    hub.on('StateChanged', (view: PlayerGameView) => this.view.set(view));
 
     hub.on('SeatConnected', (_seat: number, name: string) => this.say(`${name} connected`));
     hub.on('SeatDisconnected', (seat: number) => {
@@ -77,7 +82,6 @@ export class Game {
     if (hub) await hub.stop().catch(() => undefined);
 
     this.connection.set('idle');
-    this.drawing = false;
   }
 
   // ---------------------------------------------------------------- moves
@@ -95,11 +99,20 @@ export class Game {
   }
 
   /**
-   * Draws on purpose, which is only ever a move at an unassisted table: the seat due to play next
-   * ending a claim window that has no deadline. The ordinary draw is <see cref="autoDraw"/> and
-   * needs no button, because when it is your turn there is exactly one thing you can do.
+   * Takes back a call that was pressed but not yet paid for, putting this seat back where it was
+   * before pressing: the discard is still there to call, pass or draw through. Only ever reachable
+   * with assist off, where pressing a call is a guess made before counting your own tiles.
    */
-  drawInstead(): Promise<boolean> {
+  withdraw(): Promise<boolean> {
+    return this.invoke('Withdraw');
+  }
+
+  /**
+   * Takes a tile off the wall. Always a button press, never automatic: a tile that appeared in
+   * your hand by itself while you were still reading the last discard is a tile you did not see
+   * arrive. It is also what ends a claim window with no deadline, for the seat due to play next.
+   */
+  draw(): Promise<boolean> {
     return this.invoke('Draw');
   }
 
@@ -152,27 +165,10 @@ export class Game {
 
   // ---------------------------------------------------------------- internals
 
-  /**
-   * Takes the tile off the wall automatically when the turn comes round. Drawing is not a decision
-   * in mahjong - there is exactly one thing you can do - so making the player tap for it would add
-   * a step that never changes the outcome.
-   */
-  private async autoDraw(view: PlayerGameView): Promise<void> {
-    if (this.drawing) return;
-    if (view.phase !== 'AwaitingDraw' || view.currentSeat !== view.yourSeat) return;
-
-    this.drawing = true;
-    try {
-      await this.invoke('Draw');
-    } finally {
-      this.drawing = false;
-    }
-  }
-
   private async invoke(method: string, ...args: unknown[]): Promise<boolean> {
     const hub = this.hub;
     if (!hub || hub.state !== signalR.HubConnectionState.Connected) {
-      this.lastError.set('Not connected to the table.');
+      this.fail({ code: 'NotConnected', detail: 'Not connected to the table.' });
       return false;
     }
 
@@ -181,16 +177,33 @@ export class Game {
 
       if (!result?.success) {
         // Losing a race for a discard is ordinary, not a fault: somebody else called it first.
-        this.lastError.set(result?.detail ?? result?.error ?? 'That move was not allowed.');
+        this.fail({
+          code: result?.error ?? 'IllegalMove',
+          detail: result?.detail ?? result?.error ?? 'That move was not allowed.',
+        });
         return false;
       }
 
-      this.lastError.set(null);
+      this.clearError();
       return true;
     } catch (error) {
-      this.lastError.set(error instanceof Error ? error.message : String(error));
+      this.fail({
+        code: 'Unreachable',
+        detail: error instanceof Error ? error.message : String(error),
+      });
       return false;
     }
+  }
+
+  private fail(failure: MoveFailure): void {
+    this.lastFailure.set(failure);
+    this.lastError.set(failure.detail);
+  }
+
+  /** Both halves of the last refusal go together, so nothing on screen outlives what caused it. */
+  private clearError(): void {
+    this.lastFailure.set(null);
+    this.lastError.set(null);
   }
 
   private say(text: string): void {

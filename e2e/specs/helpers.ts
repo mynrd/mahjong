@@ -169,7 +169,80 @@ export async function closeAll(players: Player[]): Promise<void> {
   for (const player of players) await player.context.close();
 }
 
-/** Waits until it is this player's turn to throw a tile. */
+/**
+ * Presses Draw if the wall is this player's to take from right now, and says whether it did.
+ *
+ * Nothing takes a tile off the wall by itself any more, so a spec that plays a hand has to press
+ * this or the table sits on the player's turn forever. The button is always on the bar; whether it
+ * is enabled is the whole question.
+ */
+export async function drawIfOffered(player: Player): Promise<boolean> {
+  const draw = player.page.getByTestId('draw');
+
+  if (!(await draw.isEnabled().catch(() => false))) return false;
+
+  await draw.click({ timeout: 5_000 }).catch(() => undefined);
+  return true;
+}
+
+/**
+ * Throws whichever tile is at the end of the hand, for a loop that only needs the hand to move on.
+ *
+ * Three steps, not two. The second tap on a tile no longer throws it - it puts it up, and the
+ * dialog that opens is the one thing that sends it. Every step is allowed to come to nothing: a
+ * loop like this runs against a table where the turn can pass between one line and the next.
+ */
+export async function throwAnyTile(player: Player): Promise<void> {
+  const last = player.page.getByTestId('my-hand').locator('.tile-button').last();
+
+  if (!(await last.isEnabled().catch(() => false))) return;
+
+  await last.click({ timeout: 5_000 }).catch(() => undefined);
+  await last.click({ timeout: 5_000 }).catch(() => undefined);
+
+  // The dialog is the only thing that sends the tile, and it does not open at all if the two taps
+  // landed either side of the turn ending - which is ordinary against a table that keeps playing.
+  const confirm = player.page.getByTestId('discard-go');
+  const asked = await confirm
+    .waitFor({ state: 'visible', timeout: 2_000 })
+    .then(() => true)
+    .catch(() => false);
+
+  if (asked) await confirm.click({ timeout: 5_000 }).catch(() => undefined);
+}
+
+/**
+ * Says "not for me" to whatever discard is up, and says whether there was one.
+ *
+ * Every discard opens a window on every other seat now, and a window on a bot's discard has no
+ * deadline at all - it waits for the people at the table. A spec driving one page has to answer
+ * for that page or nothing moves.
+ */
+export async function passAnyClaim(player: Player): Promise<boolean> {
+  const pass = player.page
+    .getByTestId('claim-pass')
+    .or(player.page.getByTestId('claim-pass-quick'))
+    .first();
+
+  if (!(await pass.isVisible().catch(() => false))) return false;
+
+  await pass.click({ timeout: 5_000 }).catch(() => undefined);
+  return true;
+}
+
+/** Waits until it is this player's turn to throw a tile, drawing and passing to get there. */
 export async function waitForMyTurn(player: Player, timeout = 60_000): Promise<void> {
-  await expect(player.page.getByTestId('turn-bar')).toBeVisible({ timeout });
+  const turnBar = player.page.getByTestId('turn-bar');
+  const deadline = Date.now() + timeout;
+
+  while (Date.now() < deadline) {
+    if (await turnBar.isVisible().catch(() => false)) return;
+
+    await passAnyClaim(player);
+    await drawIfOffered(player);
+
+    await turnBar.waitFor({ state: 'visible', timeout: 1_000 }).catch(() => undefined);
+  }
+
+  await expect(turnBar).toBeVisible({ timeout: 1_000 });
 }

@@ -16,6 +16,13 @@
    opponents move around the discard pool into the usual cross. The DOM never changes shape,
    only where the pieces land, so nothing has to be re-rendered on rotation. */
 
+/* The height is the viewport, not a floor under it, and the tracks that can grow are all capped by
+   `minmax(0, ...)`. That is what keeps the action bar on screen: it is the last row of a grid that
+   is exactly one screen tall, so nothing above it can push it off the bottom. It used to be
+   `min-height`, and a discard pool with forty tiles in it, or three opponent cards each showing
+   sixteen face-down tiles, grew the page past the screen and took the bar with it - on a phone,
+   where there is no scrollbar to tell you the buttons went somewhere. Anything that runs out of
+   room now scrolls inside its own box instead. */
 .table {
   display: grid;
   grid-template-areas:
@@ -24,9 +31,10 @@
     'pool'
     'mine'
     'actions';
-  grid-template-rows: auto auto minmax(84px, 1fr) auto auto;
+  grid-template-rows: auto minmax(0, auto) minmax(0, 1fr) minmax(0, auto) auto;
   gap: 8px;
-  min-height: 100dvh;
+  height: 100dvh;
+  overflow: hidden;
   padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
 
   /* Every tile in the app sizes off this. */
@@ -155,6 +163,8 @@
 .opponent .who {
   flex-wrap: wrap;
   row-gap: 3px;
+  /* Clear of the eye in the corner, whichever line the name ends up on. */
+  padding-right: 26px;
 }
 
 .opponent .who .name {
@@ -162,10 +172,17 @@
   order: -1;
 }
 
+/* Scrolls rather than grows. Three players with a kang and four flowers each is a tall strip, and
+   the height for it has to come from somewhere; taking it out of this box keeps it away from the
+   discard pool and the hand. */
 .opponents {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 6px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
 }
 
 .opponent {
@@ -175,6 +192,57 @@
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   min-width: 0;
+}
+
+/* ------------------------------------------------------------------ the reveal eye
+   One per card. Above the card-wide button underneath it, and small enough that the rest of the
+   card is still the easy target for opening the player's sheet. */
+
+.eye {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--text-dim);
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--line);
+  border-radius: 50%;
+}
+
+.eye svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+}
+
+.eye.on {
+  color: var(--text-dark);
+  background: var(--gold);
+  border-color: var(--gold);
+}
+
+.eye:focus-visible {
+  outline: 3px solid var(--gold);
+  outline-offset: 2px;
+}
+
+/* What the row of backs collapses to. Same slot, same height, so turning the tiles on and off does
+   not move the melds underneath them. */
+.hidden-hand.counted {
+  align-items: center;
+  min-height: calc(var(--tile-sm) * 1.34);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
 }
 
 /* Covers the whole card so anywhere on it opens the sheet. Above the tiles, which are decoration
@@ -302,15 +370,18 @@
 
 /* ------------------------------------------------------------------ discard pool */
 
+/* Takes whatever height is left over and no more. This is the box that used to grow with the pile
+   and push the rest of the table down; now the pile scrolls inside it. */
 .pool {
   display: grid;
   place-items: center;
   position: relative;
+  min-height: 0;
+  overflow: hidden;
   padding: 10px 6px;
   background: rgba(0, 0, 0, 0.16);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  min-height: 84px;
 }
 
 .discards {
@@ -320,8 +391,10 @@
   justify-content: center;
   align-content: flex-start;
   --tile-w: var(--tile-discard);
-  max-height: 34vh;
+  max-height: 100%;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
 }
 
 .empty {
@@ -332,7 +405,9 @@
 
 .mine {
   display: grid;
+  grid-auto-rows: minmax(0, auto);
   gap: 6px;
+  min-height: 0;
   padding: 4px 8px 8px;
   background: rgba(0, 0, 0, 0.3);
   border: 1px solid var(--line);
@@ -401,18 +476,14 @@
 /* ------------------------------------------------------------------ the lifted hand
    Your box grows upward until every tile is on screen, and the discard pool gives up the room.
 
-   That works because of how the grid is sized: the pool's row is the 1fr
-   (grid-template-rows above), so it is the only track holding slack, and yours is auto. Drop the
-   pool's floor and the slack moves to your box on its own - no spanning, no overlap, no measuring
-   the action bar, whose height changes anyway when the claim bar opens.
+   That works because of how the grid is sized: the pool's row is the 1fr (grid-template-rows
+   above), so it is the only track holding slack, and yours is auto. Lifting the cap off your hand
+   is enough - the slack moves to your box on its own, with no spanning, no overlap and no
+   measuring the action bar, whose height changes anyway when the claim bar opens.
 
    The earlier version of this had your box span the pool's row and sit on top of it. Do not go
    back to that: a percentage max-height on an item spanning an auto track feeds the track sizing
    its own result, and the box came out one row tall with the rest of the hand clipped off. */
-
-.hand-open .pool {
-  min-height: 0;
-}
 
 .hand-open .discards {
   max-height: 16vh;
@@ -445,6 +516,9 @@
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  max-height: 22dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   --tile-w: 22px;
 }
 
@@ -514,6 +588,28 @@
   color: var(--text-dim);
 }
 
+/* Sits in the group label's place, so a block that turns declarable does not change the height of
+   the hand under a thumb that is already reaching for a tile. Gold rather than the dim label
+   colour: this one is an offer, not a caption. */
+.group-declare {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-align: center;
+  white-space: nowrap;
+  color: var(--gold);
+  background: none;
+  border: 1px solid var(--gold);
+  border-radius: 999px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.group-declare:focus-visible {
+  outline: 3px solid var(--gold);
+  outline-offset: 2px;
+}
+
 .tile-button {
   padding: 0;
   background: none;
@@ -549,10 +645,85 @@
   border-radius: var(--radius);
 }
 
+/* Whatever the turn is doing on the left, Draw on the right. The button keeps its column whether it
+   is live or not, so it is in the same place every turn - which is the only reason a button nobody
+   can miss is worth a fixed slot in a bar this small. */
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+
+.bar-body {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+}
+
+.btn.draw {
+  flex: 0 0 auto;
+  min-width: 76px;
+}
+
+/* Dead rather than gone. A disabled button that still reads as a button says "not yet"; one that
+   vanished would say "there is no such thing", and the next turn would have to teach it again.
+
+   It does have to read as dead, though. At 0.4 and nothing else this still looked pressable, so a
+   player whose turn it was not would tap it, get no response of any kind, and be left thinking the
+   table had stopped answering - the tooltip that explains it does not exist on a touch screen. */
+.btn.draw:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  border-style: dashed;
+  box-shadow: none;
+}
+
+.my-turn .btn.draw:not(:disabled) {
+  box-shadow: 0 0 0 2px var(--gold);
+}
+
 .prompt {
   font-size: 14px;
   font-weight: 600;
   color: var(--text-dim);
+}
+
+/* What has been called on the open tile, and who has yet to answer. Sits in a bar that is one line
+   and one height whatever happens, so it gives up its width rather than pushing anything around. */
+.call-line {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The same thing in the sheet, where there is room to say it properly and where it is the reason
+   half the buttons under it are dead. */
+.claim-standing {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+.claim-standing strong {
+  color: var(--gold);
+}
+
+/* A call beaten by one already made. Same treatment as the dead Draw: it stays where it was, so
+   the row does not reshuffle under a thumb, but it must not look like it is still on offer. */
+.option.call:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  border-style: dashed;
 }
 
 .my-turn .prompt {
@@ -799,6 +970,36 @@
   border-radius: var(--radius-sm);
 }
 
+.claim-invalid p {
+  margin: 0;
+}
+
+/* The tiles a refused call would have needed. Drawn small but drawn: a player who has just been
+   told "no" is being shown the two tiles that would have made it a yes, and a row of tiles says
+   that in one look where a sentence about faces and ranks does not. */
+.needs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.need {
+  display: flex;
+  gap: 3px;
+  --tile-w: 30px;
+}
+
+.or {
+  font-size: 11px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.85;
+}
+
 /* Runs down as the claim window closes, so the pressure is visible without reading the number.
    Sticky rather than absolute: the dialog scrolls when the options do not fit, and a bar that
    scrolls off the bottom is a bar nobody sees in the second half of the window. */
@@ -872,6 +1073,31 @@
   margin-bottom: 12px;
   font-size: 20px;
   text-align: center;
+}
+
+/* ------------------------------------------------------------------ confirming a discard */
+
+/* Hand size rather than the 19px the tile is in the hand: the whole question is which tile this
+   is, and a thumb-sized answer is what makes a mis-tap obvious before it is sent. */
+.confirm-tile {
+  display: flex;
+  justify-content: center;
+  --tile-w: 76px;
+}
+
+.confirm-what {
+  margin: 12px 0 18px;
+  font-size: 15px;
+  text-align: center;
+  color: var(--text-dim);
+}
+
+/* Even halves. Cancel first, because the reason this dialog exists is the tap that did not mean
+   anything - the answer it should be easiest to give is the one that throws nothing. */
+.confirm-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
 }
 
 /* ------------------------------------------------------------------ one player, enlarged */
@@ -1047,7 +1273,6 @@
 
   .discards {
     max-width: 620px;
-    max-height: none;
   }
 }
 
@@ -1059,10 +1284,6 @@
     --tile-sm: 22px;
     --tile-discard: 56px;
     --hand-tile: 60px;
-  }
-
-  .pool {
-    min-height: 190px;
   }
 }
 
@@ -1094,10 +1315,6 @@
     --hand-rows: 1;
   }
 
-  .pool {
-    min-height: 56px;
-  }
-
   .discards {
     max-height: 22vh;
   }
@@ -1107,6 +1324,36 @@
    Everything here is entry animation or state feedback. Nothing in it carries information that is
    not also carried by a colour, an outline or a word, so the reduced-motion block at the bottom
    turns the lot off without taking anything away. */
+
+/* ------------------------------------------------------------------ a tile you can still take
+   The last thrown tile stays yours to answer until somebody takes it or the next seat picks up, so
+   it is drawn as a thing to press rather than a thing to look at: the gold outline it already has
+   for being the live discard, plus a halo that breathes and a pointer.
+
+   It goes on the tile for every seat that has not answered, and it is the same halo whatever their
+   hand holds. Drawing it only where a claim was possible would turn the pool into a hint, which is
+   the one thing a table with the helper off exists to stop the server doing. */
+
+.discards mj-tile.claimable {
+  cursor: pointer;
+  border-radius: 4px;
+  animation: claimable-halo 1.8s ease-in-out infinite;
+}
+
+.discards mj-tile.claimable:focus-visible {
+  outline: 3px solid var(--paper);
+  outline-offset: 3px;
+}
+
+@keyframes claimable-halo {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 211, 92, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(255, 211, 92, 0);
+  }
+}
 
 /* ------------------------------------------------------------------ a discard lands
    Which edge a tile comes in from is the seat that threw it, counted round from you - the same
@@ -1347,6 +1594,7 @@
    it, so it all goes. */
 
 @media (prefers-reduced-motion: reduce) {
+  .discards mj-tile.claimable,
   .discards mj-tile.landing,
   .tile-button.throwing,
   .tile-button.arriving,
@@ -1378,6 +1626,12 @@
   /* The throw still has to get the tile out of the way, it just does it instantly. */
   .tile-button.throwing {
     opacity: 0;
+  }
+
+  /* The halo is the only thing marking a tile you can still take apart from the live discard it
+     already is, so it stays - it just stops breathing. */
+  .discards mj-tile.claimable {
+    box-shadow: 0 0 0 4px rgba(255, 211, 92, 0.4);
   }
 }
 
@@ -1425,12 +1679,37 @@
   opacity: 0.3;
 }
 
-/* Where it would land. Drawn on the target, because "the group grows" is the thing that is about
-   to happen and the ghost cannot say it. */
-.tile-button.drop-target mj-tile {
-  outline: 3px solid var(--gold);
-  outline-offset: 2px;
-  transform: translateY(-5px);
+/* Where it would land. A bar in the gap the tile would drop into rather than a ring round the
+   tile under the pointer: a drop puts the tile in one particular place in the group - before this
+   one or after it - and an outline can only say "this group", which is half the answer.
+
+   The gap between tiles is 2px, so the bar is drawn overlapping both neighbours and centred on the
+   seam; anything that had to fit inside the gap would be too thin to see on a phone. */
+.tile-button.drop-before,
+.tile-button.drop-after {
+  position: relative;
+}
+
+.tile-button.drop-before::before,
+.tile-button.drop-after::after {
+  content: '';
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 4px;
+  border-radius: 2px;
+  background: var(--gold);
+  box-shadow: 0 0 6px rgba(255, 211, 92, 0.8);
+  /* The bar is a marker, not a target - the tile under it has to keep answering hit tests. */
+  pointer-events: none;
+}
+
+.tile-button.drop-before::before {
+  left: -3px;
+}
+
+.tile-button.drop-after::after {
+  right: -3px;
 }
 
 .ghost {

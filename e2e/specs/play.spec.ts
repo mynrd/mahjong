@@ -1,20 +1,51 @@
 import { Page, expect, test } from '@playwright/test';
-import { Player, closeAll, createRoom, deal, fillWithBots, handSize, joinRoom } from './helpers';
+import {
+  Player,
+  closeAll,
+  createRoom,
+  deal,
+  drawIfOffered,
+  fillWithBots,
+  handSize,
+  joinRoom,
+  throwAnyTile,
+} from './helpers';
 
-/** Every tile face shown inside an opponent's block of hidden tiles. */
+/**
+ * Every tile face shown inside an opponent's block of hidden tiles.
+ *
+ * The blocks are collapsed to a count by default, so each one is opened first. That is the state
+ * worth checking anyway: what a player can see having deliberately asked to see it.
+ */
 async function opponentHiddenCodes(page: Page): Promise<string[]> {
+  const eyes = page.locator('.opponent .eye');
+
+  // Each one is waited on until it says it is open. Clicking and moving on used to be enough and
+  // is not: the deal is still landing while this runs, and a click that arrives in the frame the
+  // card is re-rendered in does nothing at all - leaving one opponent still collapsed and the
+  // count sixteen short, which is a failure about this loop rather than about what is on screen.
+  for (let i = 0; i < (await eyes.count()); i++) {
+    const eye = eyes.nth(i);
+
+    await expect(async () => {
+      if ((await eye.getAttribute('aria-pressed')) !== 'true') await eye.click();
+      await expect(eye).toHaveAttribute('aria-pressed', 'true', { timeout: 1_000 });
+    }).toPass({ timeout: 10_000 });
+  }
+
   return page
     .locator('.opponent .hidden-hand mj-tile .tile')
     .evaluateAll((nodes) => nodes.map((n) => n.getAttribute('data-code') ?? ''));
 }
 
-/** Throws whichever tile is currently at the end of the hand. Two taps: lift, then throw. */
+/** Throws whichever tile is currently at the end of the hand: lift, offer it up, confirm. */
 async function throwLastTile(player: Player): Promise<void> {
   const tiles = player.page.getByTestId('my-hand').locator('.tile-button');
   const last = tiles.last();
 
   await last.click();
   await last.click();
+  await player.page.getByTestId('discard-go').click();
 }
 
 test.describe('playing a hand', () => {
@@ -105,10 +136,19 @@ test.describe('playing a hand', () => {
 
     await deal(host, everyone);
 
-    // Seat 0 is to act, so the others' tiles are not clickable at all.
+    // Seat 0 is to act. The others' tiles still take a tap - that is how a hand is grouped, and
+    // waiting your turn is when anybody would want to tidy one - so what has to be true is that
+    // nothing can leave their hand: two taps, the gesture that throws, and nothing moves.
     for (const guest of guests) {
       const tiles = guest.page.getByTestId('my-hand').locator('.tile-button');
-      await expect(tiles.first()).toBeDisabled();
+
+      await tiles.first().click();
+      await tiles.first().click();
+
+      // Not even the question: the dialog is the discard step, and this seat is not on one.
+      await expect(guest.page.getByTestId('discard-confirm')).toHaveCount(0);
+      await expect(tiles).toHaveCount(16);
+      await expect(guest.page.locator('.discards mj-tile')).toHaveCount(0);
     }
 
     await expect(host.page.getByTestId('my-hand').locator('.tile-button').first()).toBeEnabled();
@@ -156,11 +196,12 @@ test.describe('playing a hand', () => {
     const outcome = host.page.getByTestId('outcome');
     const turnBar = host.page.getByTestId('turn-bar');
     const claimBar = host.page.getByTestId('claim-bar');
+    const drawBar = host.page.getByTestId('draw-bar');
 
     // Wait for whichever of the three actually happens next rather than polling on a counter.
     // Most of a hand is spent watching three bots play, so counting loop iterations would burn
     // the budget on waiting and stop the hand halfway through - which is exactly what it did.
-    const somethingToDo = turnBar.or(claimBar).or(outcome);
+    const somethingToDo = turnBar.or(claimBar).or(drawBar).or(outcome);
 
     const deadline = Date.now() + 150_000;
 
@@ -181,6 +222,9 @@ test.describe('playing a hand', () => {
         continue;
       }
 
+      // Nothing takes a tile off the wall by itself, so the turn only starts when this is pressed.
+      if (await drawIfOffered(host)) continue;
+
       if (!(await turnBar.isVisible())) continue;
 
       // Declaring a win is always better than throwing another tile.
@@ -190,10 +234,9 @@ test.describe('playing a hand', () => {
         continue;
       }
 
-      const tiles = host.page.getByTestId('my-hand').locator('.tile-button');
-      if (!(await tiles.last().isEnabled().catch(() => false))) continue;
-
-      await throwLastTile(host);
+      // The tolerant throw, not this file's own: the turn can end between the check above and the
+      // taps below, and then no dialog opens because there is nothing left to ask about.
+      await throwAnyTile(host);
     }
 
     await expect(outcome).toBeVisible({ timeout: 120_000 });

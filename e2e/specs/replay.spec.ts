@@ -18,20 +18,26 @@ async function playAHand(page: Page): Promise<void> {
   // The three bots play themselves, and the host seat only has to keep throwing. The outcome sheet
   // is what says the hand is over.
   const outcome = page.getByTestId('outcome');
-  const deadline = Date.now() + 180_000;
+  const deadline = Date.now() + 260_000;
 
   while (!(await outcome.isVisible().catch(() => false)) && Date.now() < deadline) {
-    // Passing keeps the hand moving; a window left unanswered sits until it times out.
+    // Passing is what keeps the hand moving. Every discard opens a window on this seat now, and the
+    // ones the bots throw have no clock at all: they wait for the person to say they are done.
     const pass = page.getByTestId('claim-pass');
     if (await pass.isVisible().catch(() => false)) await pass.click().catch(() => {});
 
+    // Nothing takes a tile off the wall by itself, so the turn starts here.
+    const draw = page.getByTestId('draw');
+    if (await draw.isEnabled().catch(() => false)) await draw.click().catch(() => {});
+
     if (await page.getByTestId('turn-bar').isVisible().catch(() => false)) {
-      // Two taps on the same tile: lift, then throw. Same gesture as play.spec.ts.
+      // Lift, offer it up, confirm. The second tap only asks now. Same gesture as play.spec.ts.
       const last = page.getByTestId('my-hand').locator('.tile-button').last();
 
       if (await last.isEnabled().catch(() => false)) {
         await last.click().catch(() => {});
         await last.click().catch(() => {});
+        await page.getByTestId('discard-go').click().catch(() => {});
       }
     }
 
@@ -46,9 +52,10 @@ async function playAHand(page: Page): Promise<void> {
 test.describe('replays', () => {
   test('the password gates the list, and a hand can be stepped through', async ({ browser }) => {
     // A whole hand has to be played before there is anything to replay, and bots deliberately take
-    // 900ms a move so a human can follow them. That is a minute and a half of the budget before the
-    // replay screen is even opened, so the default 90 seconds is not enough.
-    test.setTimeout(300_000);
+    // 900ms a move so a human can follow them - plus a Next from this seat on every one of the
+    // fifty-odd tiles they throw. That is several minutes before the replay screen is even opened,
+    // so the default 90 seconds is nowhere near enough.
+    test.setTimeout(420_000);
 
     const { host, code } = await createRoomWithRules(browser, FAST, { roomName: 'Replay Table' });
     await fillWithBots(host);
@@ -117,7 +124,7 @@ test.describe('replays', () => {
   });
 
   test('the arrow keys step too, and the unlock survives a reload', async ({ browser }) => {
-    test.setTimeout(300_000);
+    test.setTimeout(420_000);
 
     const { host, code } = await createRoomWithRules(browser, FAST, { roomName: 'Replay Keys' });
     await fillWithBots(host);
