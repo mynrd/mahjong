@@ -1,882 +1,921 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.InteropServices;
 
 namespace Mahjong.Domain;
 
-/// <summary>Raised when a player tries something the rules do not allow.</summary>
-public sealed class IllegalMoveException(string message) : InvalidOperationException(message);
+public sealed class IllegalMoveException : InvalidOperationException
+{
+	public string? Code { get; }
 
-/// <summary>
-/// One concrete way a seat could take a discard, and the exact tiles out of its own hand that
-/// doing so would cost. <see cref="Support"/> never includes the discard itself, and is empty for
-/// a Todas, where the win is read off the whole hand rather than a subset of it.
-/// </summary>
+	public IllegalMoveException(string message, string? code = null)
+		: base(message)
+	{
+		Code = code;
+	}
+}
 public sealed record ClaimCandidate(ClaimKind Kind, IReadOnlyList<TileRef> Support)
 {
-    /// <summary>Short label for the group this candidate would form, e.g. "Chow B3-B4-B5".</summary>
-    public string Describe(TileRef discard)
-    {
-        if (Kind == ClaimKind.Todas) return "Todas";
-
-        var faces = Support
-            .Append(discard)
-            .Select(t => t.Tile)
-            .OrderBy(t => t.Suit)
-            .ThenBy(t => t.Rank)
-            .Select(t => t.Code);
-
-        return Kind == ClaimKind.Chow
-            ? $"Chow {string.Join("-", faces)}"
-            : $"{Kind} {discard.Tile.Code}";
-    }
+	public string Describe(TileRef discard)
+	{
+		if (Kind == ClaimKind.Todas)
+		{
+			return "Todas";
+		}
+		IEnumerable<string> values = from t in Support.Append(discard)
+			select t.Tile into t
+			orderby t.Suit, t.Rank
+			select t.Code;
+		return (Kind == ClaimKind.Chow) ? ("Chow " + string.Join("-", values)) : $"{Kind} {discard.Tile.Code}";
+	}
 }
-
-/// <summary>
-/// The rules engine. Every method takes the state, validates the move, mutates the state and
-/// returns the events that resulted. Nothing here touches a database, a clock it did not receive,
-/// or a network, which is what lets the whole ruleset be tested in-process.
-/// </summary>
 public static class MahjongGame
 {
-    public const int Seats = 4;
-    public const int HandSize = 16;
-
-    // ------------------------------------------------------------------ starting a hand
-
-    /// <summary>
-    /// Shuffles the wall, deals 16 tiles to each seat and 17 to the mano, replaces every bonus
-    /// tile dealt, picks the joker and works out the opening ambitions.
-    /// </summary>
-    public static (GameState State, List<GameEvent> Events) Deal(
-        RuleOptions rules,
-        int handNumber,
-        int manoSeat,
-        int seed,
-        DateTimeOffset now)
-    {
-        var rng = new Random(seed);
-        var wall = TileSet.All.ToList();
-        Shuffle(wall, rng);
-
-        var state = new GameState
-        {
-            Rules = rules,
-            HandNumber = handNumber,
-            ManoSeat = manoSeat,
-            Seed = seed,
-            Wall = wall,
-            FrontIndex = 0,
-            BackIndex = TileSet.TotalTiles - 1,
-            CurrentSeat = manoSeat,
-        };
-
-        var events = new List<GameEvent> { new HandDealt(handNumber, manoSeat) };
-
-        // Deal 16 each, mano first, going counter-clockwise. Bonus tiles land in hand for now and
-        // are swapped out below, which is how it is done at a real table.
-        for (var round = 0; round < HandSize; round++)
-            for (var offset = 0; offset < Seats; offset++)
-                state.Hands[(manoSeat + offset) % Seats].Concealed.Add(state.Wall[state.FrontIndex++]);
-
-        // The mano takes the extra tile that makes them the first to discard.
-        state.Hands[manoSeat].Concealed.Add(state.Wall[state.FrontIndex++]);
-
-        if (rules.JokerEnabled)
-        {
-            state.Joker = Tile.FromPlayableIndex(rng.Next(TileSet.PlayableFaces));
-            events.Add(new JokerChosen(state.Joker.Value));
-        }
-
-        // Swap out dealt bonus tiles, mano first, repeating until nobody holds one.
-        for (var offset = 0; offset < Seats; offset++)
-        {
-            var seat = (manoSeat + offset) % Seats;
-            events.AddRange(ReplaceBonusTiles(state, seat));
-        }
-
-        // "No flowers": dealt none at all.
-        foreach (var offset in Enumerable.Range(0, Seats))
-        {
-            var seat = (manoSeat + offset) % Seats;
-            if (state.Hands[seat].Bonus.Count == 0)
-                events.Add(PayAmbition(state, seat, Ambition.NoFlowers));
-        }
-
-        state.Phase = GamePhase.AwaitingDiscard;
-        state.JustDrew = state.Hands[manoSeat].Concealed[^1];
-
-        // "Bisaklat": the mano was dealt a hand that is already complete.
-        var mano = state.Hands[manoSeat];
-        if (HandAnalyzer.Analyze(mano.Concealed, mano.Melds, state.Joker, rules).IsWin)
-        {
-            events.Add(EndWithWin(state, manoSeat, discarderSeat: null, winningTile: state.JustDrew.Value.Tile,
-                bisaklat: true));
-            return (state, events);
-        }
-
-        events.Add(new TurnChanged(GamePhase.AwaitingDiscard) { Seat = manoSeat });
-        return (state, events);
-    }
-
-    // ------------------------------------------------------------------ the turn cycle
-
-    /// <summary>
-    /// The current seat takes a tile from the front of the wall, exposing and replacing any bonus
-    /// tiles it turns up along the way.
-    /// </summary>
-    public static List<GameEvent> Draw(GameState state, int seat, DateTimeOffset now)
-    {
-        var events = new List<GameEvent>();
-
-        // An assist-off claim window has no deadline of its own, so this is what ends one nobody
-        // wanted: the seat due to play next picks up, exactly as it would at a real table, and the
-        // discard is dead. Anything already claimed still beats the draw - the tile goes to the
-        // claimant and this seat does not get its turn yet.
-        if (state.Phase == GamePhase.AwaitingClaims && state.Pending is { } waiting
-            && !state.Rules.AssistEnabled && seat == GameState.NextSeat(state.CurrentSeat))
-        {
-            // Whoever is still inside their ten seconds gets them. The wait is bounded, and letting
-            // the next seat draw through it would make the clock decorative.
-            Require(waiting.NamingDeadline.Count == 0,
-                "Somebody has claimed that tile and is still choosing which tiles it costs.");
-
-            // Drawing is this seat saying it does not want the discard, so its own half-made claim
-            // goes with it.
-            waiting.Declared.Remove(seat);
-            waiting.NamingDeadline.Remove(seat);
-            waiting.Passed.Add(seat);
-
-            events.AddRange(TryCloseClaimWindow(state, now, forced: true));
-
-            // A claim took the tile. That seat is now on turn, not this one.
-            if (state.Phase != GamePhase.AwaitingDraw || state.CurrentSeat != seat) return events;
-        }
-
-        Require(state.Phase == GamePhase.AwaitingDraw, $"Seat {seat} cannot draw during {state.Phase}.");
-        Require(seat == state.CurrentSeat, $"It is seat {state.CurrentSeat}'s turn, not seat {seat}'s.");
-
-        if (state.WallExhausted)
-        {
-            events.Add(EndAsDraw(state));
-            return events;
-        }
-
-        var tile = state.Wall[state.FrontIndex++];
-        events.Add(new TileDrawn(tile, Replacement: false) { Seat = seat });
-
-        if (tile.Tile.IsBonus)
-        {
-            state.Hands[seat].Bonus.Add(tile);
-            events.Add(new BonusExposed(tile, state.Hands[seat].Bonus.Count) { Seat = seat });
-
-            var replaced = TakeReplacement(state, seat, events);
-            if (replaced is null) return events;
-            tile = replaced.Value;
-        }
-
-        state.Hands[seat].Concealed.Add(tile);
-        state.JustDrew = tile;
-        state.Phase = GamePhase.AwaitingDiscard;
-        events.Add(new TurnChanged(GamePhase.AwaitingDiscard) { Seat = seat });
-
-        return events;
-    }
-
-    /// <summary>The current seat puts a tile down, which opens the claim window for the others.</summary>
-    public static List<GameEvent> Discard(GameState state, int seat, int tileId, DateTimeOffset now)
-    {
-        Require(state.Phase == GamePhase.AwaitingDiscard, $"Seat {seat} cannot discard during {state.Phase}.");
-        Require(seat == state.CurrentSeat, $"It is seat {state.CurrentSeat}'s turn, not seat {seat}'s.");
-
-        var hand = state.Hands[seat];
-        var index = hand.Concealed.FindIndex(t => t.Id == tileId);
-        Require(index >= 0, $"Seat {seat} does not hold tile {tileId}.");
-
-        var tile = hand.Concealed[index];
-        Require(tile.Tile.IsPlayable, $"{tile} is a bonus tile and cannot be discarded.");
-
-        hand.Concealed.RemoveAt(index);
-        state.Discards.Add(new DiscardedTile(seat, tile));
-        state.JustDrew = null;
-
-        var events = new List<GameEvent> { new TileDiscarded(tile) { Seat = seat } };
-
-        var allowed = AllowedClaims(state, tile, seat);
-        if (allowed.Count == 0)
-        {
-            events.AddRange(AdvanceTurn(state));
-            return events;
-        }
-
-        state.Phase = GamePhase.AwaitingClaims;
-        state.Pending = new PendingClaim
-        {
-            Tile = tile,
-            FromSeat = seat,
-            OpenedUtc = now,
-            DeadlineUtc = ClaimDeadlineFor(state, seat, now),
-        };
-
-        // Seats with nothing to claim are treated as having passed already, so the window closes
-        // as soon as the seats that actually have a decision have made it.
-        for (var other = 0; other < Seats; other++)
-            if (other != seat && !allowed.ContainsKey(other))
-            {
-                state.Pending.Passed.Add(other);
-                state.Pending.AutoPassed.Add(other);
-            }
-
-        events.Add(new ClaimWindowOpened(tile, seat, state.Pending.DeadlineUtc, allowed) { Seat = seat });
-        return events;
-    }
-
-    /// <summary>
-    /// When the window on this discard closes by itself, or null when it does not.
-    ///
-    /// Assist on, always the house window. Assist off, it depends who threw the tile. A human's
-    /// discard gets no deadline: nobody was told what the tile was good for, so timing them out for
-    /// failing to spot it is exactly the thing the setting is against, and the people at the table
-    /// can chase each other. A bot's discard gets a short one, because nobody is going to.
-    /// </summary>
-    private static DateTimeOffset? ClaimDeadlineFor(GameState state, int discarder, DateTimeOffset now)
-    {
-        if (state.Rules.AssistEnabled) return now.AddSeconds(state.Rules.ClaimWindowSeconds);
-
-        return state.BotSeats.Contains(discarder)
-            ? now.AddSeconds(state.Rules.BotDiscardWindowSeconds)
-            : null;
-    }
-
-    /// <summary>A seat says it does not want the discard.</summary>
-    public static List<GameEvent> Pass(GameState state, int seat, DateTimeOffset now)
-    {
-        Require(state.Phase == GamePhase.AwaitingClaims && state.Pending is not null,
-            $"Seat {seat} cannot pass during {state.Phase}.");
-        Require(seat != state.Pending!.FromSeat, "The discarding seat has nothing to pass on.");
-
-        state.Pending.Declared.Remove(seat);
-        state.Pending.NamingDeadline.Remove(seat);
-        state.Pending.Passed.Add(seat);
-        state.Pending.AutoPassed.Remove(seat);
-
-        return TryCloseClaimWindow(state, now, forced: false);
-    }
-
-    /// <summary>A seat declares a claim on the discard. The window still has to close before it applies.</summary>
-    public static List<GameEvent> Claim(GameState state, int seat, ClaimKind kind, IReadOnlyList<int> tileIds,
-        DateTimeOffset now)
-    {
-        Require(state.Phase == GamePhase.AwaitingClaims && state.Pending is not null,
-            $"Seat {seat} cannot claim during {state.Phase}.");
-
-        var pending = state.Pending!;
-        Require(seat != pending.FromSeat, "A seat cannot claim its own discard.");
-        Require(!pending.Burned.Contains(seat),
-            $"Seat {seat} ran out of time to name its tiles and is out of this discard.");
-
-        // A pung or kang press is spent the moment it is made: the only thing that may follow it
-        // is the tiles it costs. Without this a seat could bounce between kinds and keep restarting
-        // its own clock, and the chow ranked underneath would never get the tile. Todas is the one
-        // way out, because it names no tiles and so resolves on the spot rather than extending
-        // anything, and losing a win to having pressed the wrong button first would be absurd.
-        if (pending.NamingDeadline.ContainsKey(seat) && kind != ClaimKind.Todas)
-        {
-            var pressed = pending.Declared[seat];
-            Require(kind == pressed.Kind,
-                $"Seat {seat} already pressed {pressed.Kind} on this tile and cannot switch to {kind}.");
-            Require(tileIds.Count > 0, $"Seat {seat} has already pressed {pressed.Kind}. Name the tiles it costs.");
-        }
-
-        var candidates = ClaimCandidates(state, pending.Tile, pending.FromSeat, seat);
-        Require(candidates.Any(c => c.Kind == kind),
-            $"Seat {seat} cannot declare {kind} on {pending.Tile}.");
-
-        // No tiles named means "you pick" - what bots send and what the client sent before it
-        // could choose. Named tiles have to match one candidate exactly, because the player must
-        // get the group they picked rather than the one the server would have re-derived.
-        IReadOnlyList<int> declaredTiles = [];
-
-        if (tileIds.Count > 0)
-        {
-            Require(tileIds.Distinct().Count() == tileIds.Count, "The same tile cannot be picked twice.");
-
-            var supporting = ResolveHeld(state.Hands[seat], tileIds);
-            var picked = supporting.Select(t => t.Tile.Code).Order().ToList();
-
-            // Matched on faces rather than ids: holding three 5-bamboo, which two the player
-            // happened to tap for a pung is not a decision the rules have an opinion about.
-            Require(
-                candidates.Any(c => c.Kind == kind
-                    && c.Support.Select(t => t.Tile.Code).Order().SequenceEqual(picked)),
-                $"Seat {seat}'s tiles do not make a {kind} with {pending.Tile}.");
-
-            declaredTiles = supporting.Select(t => t.Id).ToList();
-        }
-
-        pending.Passed.Remove(seat);
-
-        // With assist off, pressing a button and naming the tiles are two separate acts. Nobody was
-        // told what the discard was good for, so the press is a seat saying "that one is mine" a
-        // good while before it has worked out which of its own tiles pay for it. An empty press is
-        // that first act. A todas names no tiles at any table, so it is never waiting on any.
-        var awaitingTiles = !state.Rules.AssistEnabled && declaredTiles.Count == 0 && kind != ClaimKind.Todas;
-
-        pending.Declared[seat] = new DeclaredClaim(kind, declaredTiles, awaitingTiles);
-
-        if (awaitingTiles)
-        {
-            // Only the claims that outrank a chow are put on a clock, and only if one is not
-            // already running for this seat. A chow has nothing ranked under it waiting to be let
-            // through, so there is nobody for it to keep waiting and it is left alone.
-            if (kind is ClaimKind.Pung or ClaimKind.Kang && !pending.NamingDeadline.ContainsKey(seat))
-                pending.NamingDeadline[seat] = now.AddSeconds(state.Rules.ClaimFulfilSeconds);
-        }
-        else
-        {
-            pending.NamingDeadline.Remove(seat);
-        }
-
-        return TryCloseClaimWindow(state, now, forced: false);
-    }
-
-    /// <summary>
-    /// Runs whatever clocks the open window has. With assist on that is the window deadline, which
-    /// closes it and reads every seat that never answered as having passed. With assist off there is
-    /// no window deadline, only the ten seconds each seat that pressed pung or kang has to name the
-    /// tiles: those that run out are dropped, and the tile falls to whatever was ranked under them.
-    /// </summary>
-    public static List<GameEvent> ExpireClaimWindow(GameState state, DateTimeOffset now)
-    {
-        if (state.Phase != GamePhase.AwaitingClaims || state.Pending is not { } pending) return [];
-
-        var lapsed = pending.NamingDeadline
-            .Where(kv => kv.Value <= now)
-            .Select(kv => kv.Key)
-            .ToList();
-
-        foreach (var seat in lapsed) Burn(pending, seat);
-
-        var windowExpired = pending.DeadlineUtc is { } deadline && deadline <= now;
-
-        // A naming clock outlives the window deadline. A seat that pressed in time was promised its
-        // ten seconds to name the tiles, and taking the tile off it half way through because the
-        // window happened to run out would make that promise a lie. The expired deadline is not
-        // forgotten: it closes the window on the next tick, once nobody is still choosing.
-        if (windowExpired && pending.NamingDeadline.Count > 0) windowExpired = false;
-
-        // Called on every tick, so it has to be able to say "nothing was due yet".
-        if (!windowExpired && lapsed.Count == 0) return [];
-
-        return TryCloseClaimWindow(state, now, forced: windowExpired);
-    }
-
-    /// <summary>
-    /// Takes a seat out of the discard for good, because it pressed and never named its tiles.
-    /// Counted as a pass so the window can finish without it.
-    /// </summary>
-    private static void Burn(PendingClaim pending, int seat)
-    {
-        pending.NamingDeadline.Remove(seat);
-        pending.Declared.Remove(seat);
-        pending.Burned.Add(seat);
-        pending.Passed.Add(seat);
-    }
-
-    // ------------------------------------------------------------------ declarations on your own turn
-
-    /// <summary>Four self-drawn copies, declared face down. Pays more than an open kang.</summary>
-    public static List<GameEvent> DeclareSecretKang(GameState state, int seat, Tile face)
-    {
-        Require(state.Phase == GamePhase.AwaitingDiscard && seat == state.CurrentSeat,
-            $"Seat {seat} cannot declare a secret kang during {state.Phase}.");
-
-        var hand = state.Hands[seat];
-        var copies = hand.Concealed.Where(t => t.Tile == face).Take(4).ToList();
-        Require(copies.Count == 4, $"Seat {seat} does not hold four {face}.");
-
-        foreach (var tile in copies) hand.Concealed.Remove(tile);
-        var meld = new ExposedMeld(SetKind.Kang, copies, Concealed: true);
-        hand.Melds.Add(meld);
-
-        var events = new List<GameEvent> { new MeldFormed(meld) { Seat = seat } };
-        events.Add(PayAmbition(state, seat, Ambition.SecretKang));
-
-        var replacement = TakeReplacement(state, seat, events);
-        if (replacement is null) return events;
-
-        hand.Concealed.Add(replacement.Value);
-        state.JustDrew = replacement.Value;
-        events.Add(new TurnChanged(GamePhase.AwaitingDiscard) { Seat = seat });
-
-        return events;
-    }
-
-    /// <summary>Extends an already-exposed pung with the self-drawn fourth tile.</summary>
-    public static List<GameEvent> DeclareSagasa(GameState state, int seat, Tile face)
-    {
-        Require(state.Phase == GamePhase.AwaitingDiscard && seat == state.CurrentSeat,
-            $"Seat {seat} cannot declare sagasa during {state.Phase}.");
-
-        var hand = state.Hands[seat];
-        var pungIndex = hand.Melds.FindIndex(m => m.Kind == SetKind.Pung && m.BaseTile == face);
-        Require(pungIndex >= 0, $"Seat {seat} has no exposed pung of {face} to extend.");
-
-        var fourth = hand.Concealed.FirstOrDefault(t => t.Tile == face, new TileRef(-1));
-        Require(fourth.Id >= 0, $"Seat {seat} does not hold a fourth {face}.");
-
-        hand.Concealed.Remove(fourth);
-
-        var pung = hand.Melds[pungIndex];
-        var kang = pung with
-        {
-            Kind = SetKind.Kang,
-            Tiles = [.. pung.Tiles, fourth],
-            FromSagasa = true,
-        };
-        hand.Melds[pungIndex] = kang;
-
-        var events = new List<GameEvent> { new MeldFormed(kang) { Seat = seat } };
-        events.Add(PayAmbition(state, seat, Ambition.Sagasa));
-
-        var replacement = TakeReplacement(state, seat, events);
-        if (replacement is null) return events;
-
-        hand.Concealed.Add(replacement.Value);
-        state.JustDrew = replacement.Value;
-        events.Add(new TurnChanged(GamePhase.AwaitingDiscard) { Seat = seat });
-
-        return events;
-    }
-
-    /// <summary>Declares a complete hand on the tile just drawn. This is a bunot, a self-drawn win.</summary>
-    public static List<GameEvent> DeclareTodasOnDraw(GameState state, int seat)
-    {
-        Require(state.Phase == GamePhase.AwaitingDiscard && seat == state.CurrentSeat,
-            $"Seat {seat} cannot declare todas during {state.Phase}.");
-        Require(state.JustDrew is not null, "There is no drawn tile to win on.");
-
-        var hand = state.Hands[seat];
-        Require(HandAnalyzer.Analyze(hand.Concealed, hand.Melds, state.Joker, state.Rules).IsWin,
-            $"Seat {seat}'s hand is not complete.");
-
-        return [EndWithWin(state, seat, discarderSeat: null, winningTile: state.JustDrew.Value.Tile, bisaklat: false)];
-    }
-
-    // ------------------------------------------------------------------ what can be claimed
-
-    /// <summary>
-    /// Works out, for each seat other than the discarder, which claims the rules permit on this
-    /// tile. Used both to open the claim window and to validate a claim when it arrives.
-    /// </summary>
-    public static IReadOnlyDictionary<int, IReadOnlyList<ClaimKind>> AllowedClaims(
-        GameState state, TileRef discard, int fromSeat)
-    {
-        var result = new Dictionary<int, IReadOnlyList<ClaimKind>>();
-
-        for (var seat = 0; seat < Seats; seat++)
-        {
-            if (seat == fromSeat) continue;
-
-            // Derived from the candidates rather than checked separately, so the kinds offered and
-            // the concrete groups behind them can never disagree.
-            var kinds = ClaimCandidates(state, discard, fromSeat, seat)
-                .Select(c => c.Kind)
-                .Distinct()
-                .ToList();
-
-            if (kinds.Count > 0) result[seat] = kinds;
-        }
-
-        return result;
-    }
-
-    /// <summary>
-    /// Every concrete way one seat could take this discard, with the exact tiles from its own hand
-    /// each way would cost. Highest-ranked kind first, which is the order
-    /// <see cref="PickWinningClaim"/> would resolve a contested tile in.
-    ///
-    /// A joker is not wild here: the checks compare literal faces, the same as the rest of the
-    /// claim rules. Offering a joker-backed claim would only get it refused a moment later.
-    /// </summary>
-    public static IReadOnlyList<ClaimCandidate> ClaimCandidates(
-        GameState state, TileRef discard, int fromSeat, int seat)
-    {
-        if (seat == fromSeat || seat < 0 || seat >= Seats) return [];
-
-        var hand = state.Hands[seat];
-        var face = discard.Tile;
-        var candidates = new List<ClaimCandidate>();
-
-        // The win is read off the whole hand, so there is no subset of tiles to pick.
-        if (CanWinOn(state, seat, face)) candidates.Add(new ClaimCandidate(ClaimKind.Todas, []));
-
-        var copies = hand.Concealed.Where(t => t.Tile == face).ToList();
-
-        if (copies.Count >= 3) candidates.Add(new ClaimCandidate(ClaimKind.Kang, copies.Take(3).ToList()));
-
-        // Which two physical copies is not a player decision - the faces are identical.
-        if (copies.Count >= 2) candidates.Add(new ClaimCandidate(ClaimKind.Pung, copies.Take(2).ToList()));
-
-        var chowAllowed = face.IsSuited
-            && (!state.Rules.ChowFromLeftOnly || GameState.IsLeftOf(seat, fromSeat));
-
-        if (chowAllowed)
-            foreach (var run in RunPartners(hand, face))
-                candidates.Add(new ClaimCandidate(ClaimKind.Chow, run));
-
-        return candidates;
-    }
-
-    private static bool CanWinOn(GameState state, int seat, Tile face)
-    {
-        var hand = state.Hands[seat];
-        var probe = hand.ConcealedFaces.Append(face).ToList();
-
-        if (!HandAnalyzer.Analyze(probe, hand.Melds, state.Joker, state.Rules).IsWin) return false;
-
-        // Some tables refuse to let a joker stand in for the tile you claim off a discard. Under
-        // that rule the hand has to be complete without leaning on a joker for the winning tile,
-        // which is the same as checking it still wins with the joker rule turned off for the check.
-        if (!state.Rules.JokerCanCompleteClaimedWin && state.Joker is not null)
-            return HandAnalyzer.Analyze(probe, hand.Melds, joker: null, state.Rules).IsWin;
-
-        return true;
-    }
-
-    /// <summary>
-    /// Every distinct pair of held tiles that makes a run with <paramref name="face"/>: the claimed
-    /// tile at the top of the run, in the middle, or at the bottom. Lowest run first, so a caller
-    /// that only wants one gets the same one the old auto-pick chose.
-    /// </summary>
-    private static List<List<TileRef>> RunPartners(PlayerHand hand, Tile face)
-    {
-        var runs = new List<List<TileRef>>();
-        if (!face.IsSuited) return runs;
-
-        TileRef? Find(int rank)
-        {
-            if (rank is < 1 or > 9) return null;
-            var wanted = new Tile(face.Suit, rank);
-            var match = hand.Concealed.FirstOrDefault(t => t.Tile == wanted, new TileRef(-1));
-            return match.Id >= 0 ? match : null;
-        }
-
-        foreach (var low in new[] { face.Rank - 2, face.Rank - 1, face.Rank })
-        {
-            if (low < 1 || low + 2 > 9) continue;
-
-            var wanted = new[] { low, low + 1, low + 2 }.Where(r => r != face.Rank).ToList();
-            if (wanted.Count != 2) continue;
-
-            var first = Find(wanted[0]);
-            var second = Find(wanted[1]);
-            if (first is null || second is null) continue;
-
-            runs.Add([first.Value, second.Value]);
-        }
-
-        return runs;
-    }
-
-    // ------------------------------------------------------------------ closing the claim window
-
-    private static List<GameEvent> TryCloseClaimWindow(GameState state, DateTimeOffset now, bool forced)
-    {
-        var pending = state.Pending!;
-
-        // A seat that has pressed but not yet named its tiles has not finished answering, whatever
-        // the count says. Nothing resolves until it does, its clock runs out, or the next seat draws.
-        if (!forced && pending.Declared.Values.Any(c => c.AwaitingTiles)) return [];
-
-        var answered = pending.Declared.Count + pending.Passed.Count;
-
-        // Three other seats have to be accounted for before the tile can move on.
-        if (!forced && answered < Seats - 1) return [];
-
-        // Forced means the deadline passed or the next seat drew. Either way a press that never
-        // became a claim is dropped rather than guessed at: the seat never said what it cost.
-        foreach (var seat in pending.Declared.Where(kv => kv.Value.AwaitingTiles).Select(kv => kv.Key).ToList())
-            Burn(pending, seat);
-
-        if (pending.Declared.Count == 0)
-        {
-            state.Pending = null;
-            var events = new List<GameEvent> { new ClaimWindowClosed(pending.Tile) };
-            events.AddRange(AdvanceTurn(state));
-            return events;
-        }
-
-        var winner = PickWinningClaim(state, pending);
-        return ApplyClaim(state, winner.Seat, winner.Claim, pending);
-    }
-
-    /// <summary>
-    /// Resolves competing claims. A declared win outranks a pung or kang, which outrank a chow.
-    /// Two seats claiming the same rank are separated by who sits nearer after the discarder.
-    /// </summary>
-    private static (int Seat, DeclaredClaim Claim) PickWinningClaim(GameState state, PendingClaim pending)
-    {
-        int Rank(ClaimKind kind) => kind switch
-        {
-            ClaimKind.Todas => state.Rules.TodasBeatsPungAndKang ? 3 : 1,
-            ClaimKind.Kang => 2,
-            ClaimKind.Pung => 2,
-            ClaimKind.Chow => 0,
-            _ => -1,
-        };
-
-        int Distance(int seat) => (seat - pending.FromSeat + Seats) % Seats;
-
-        return pending.Declared
-            .OrderByDescending(kv => Rank(kv.Value.Kind))
-            .ThenBy(kv => Distance(kv.Key))
-            .Select(kv => (Seat: kv.Key, Claim: kv.Value))
-            .First();
-    }
-
-    private static List<GameEvent> ApplyClaim(GameState state, int seat, DeclaredClaim declared, PendingClaim pending)
-    {
-        var kind = declared.Kind;
-        var hand = state.Hands[seat];
-        var face = pending.Tile.Tile;
-        var events = new List<GameEvent>();
-
-        // The tile leaves the discard pile whichever way it is claimed.
-        var lastIndex = state.Discards.Count - 1;
-        state.Discards[lastIndex] = state.Discards[lastIndex] with { Claimed = true };
-        state.Pending = null;
-
-        if (kind == ClaimKind.Todas)
-        {
-            events.Add(EndWithWin(state, seat, pending.FromSeat, pending.Tile.Tile, bisaklat: false));
-            return events;
-        }
-
-        var needed = kind switch
-        {
-            ClaimKind.Kang => 3,
-            ClaimKind.Pung => 2,
-            ClaimKind.Chow => 2,
-            _ => throw new IllegalMoveException($"Cannot apply claim {kind}."),
-        };
-
-        List<TileRef> supporting;
-
-        if (declared.TileIds.Count > 0)
-        {
-            // The player named these tiles when the window was open. Re-checked here rather than
-            // trusted, because a sagasa or a second claim can have moved the hand on since.
-            supporting = ResolveHeld(hand, declared.TileIds);
-
-            if (supporting.Count != needed)
-                throw new IllegalMoveException(
-                    $"Seat {seat} named {supporting.Count} tiles for a {kind}, which needs {needed}.");
-        }
-        else if (kind == ClaimKind.Chow)
-        {
-            supporting = RunPartners(hand, face).FirstOrDefault()
-                ?? throw new IllegalMoveException($"Seat {seat} can no longer form a run with {face}.");
-        }
-        else
-        {
-            supporting = hand.Concealed.Where(t => t.Tile == face).Take(needed).ToList();
-            if (supporting.Count != needed)
-                throw new IllegalMoveException($"Seat {seat} no longer holds {needed} copies of {face}.");
-        }
-
-        foreach (var tile in supporting) hand.Concealed.Remove(tile);
-
-        var meld = new ExposedMeld(
-            kind == ClaimKind.Chow ? SetKind.Chow : kind == ClaimKind.Kang ? SetKind.Kang : SetKind.Pung,
-            [.. supporting, pending.Tile],
-            Concealed: false,
-            ClaimedFromSeat: pending.FromSeat);
-
-        hand.Melds.Add(meld);
-        events.Add(new MeldFormed(meld) { Seat = seat });
-
-        state.CurrentSeat = seat;
-
-        if (kind == ClaimKind.Kang)
-        {
-            events.Add(PayAmbition(state, seat, Ambition.Kang));
-
-            var replacement = TakeReplacement(state, seat, events);
-            if (replacement is null) return events;
-
-            hand.Concealed.Add(replacement.Value);
-            state.JustDrew = replacement.Value;
-        }
-        else
-        {
-            state.JustDrew = null;
-        }
-
-        // A claim skips whoever sat between the discarder and the claimant. The claimant is now
-        // holding one tile too many and has to discard.
-        state.Phase = GamePhase.AwaitingDiscard;
-        events.Add(new TurnChanged(GamePhase.AwaitingDiscard) { Seat = seat });
-
-        return events;
-    }
-
-    // ------------------------------------------------------------------ shared mechanics
-
-    private static List<GameEvent> AdvanceTurn(GameState state)
-    {
-        var events = new List<GameEvent>();
-
-        state.CurrentSeat = GameState.NextSeat(state.CurrentSeat);
-        state.JustDrew = null;
-
-        if (state.WallExhausted)
-        {
-            events.Add(EndAsDraw(state));
-            return events;
-        }
-
-        state.Phase = GamePhase.AwaitingDraw;
-        events.Add(new TurnChanged(GamePhase.AwaitingDraw) { Seat = state.CurrentSeat });
-        return events;
-    }
-
-    /// <summary>
-    /// Turns over bonus tiles a seat is holding and takes replacements from the tail of the wall,
-    /// repeating because a replacement can itself be a bonus tile.
-    /// </summary>
-    private static List<GameEvent> ReplaceBonusTiles(GameState state, int seat)
-    {
-        var events = new List<GameEvent>();
-        var hand = state.Hands[seat];
-
-        while (true)
-        {
-            var index = hand.Concealed.FindIndex(t => t.Tile.IsBonus);
-            if (index < 0) break;
-
-            var bonus = hand.Concealed[index];
-            hand.Concealed.RemoveAt(index);
-            hand.Bonus.Add(bonus);
-            events.Add(new BonusExposed(bonus, hand.Bonus.Count) { Seat = seat });
-
-            var replacement = TakeReplacement(state, seat, events);
-            if (replacement is null) break;
-
-            hand.Concealed.Add(replacement.Value);
-        }
-
-        return events;
-    }
-
-    /// <summary>
-    /// Takes one tile from the tail of the wall. Bonus tiles turned up this way are exposed and
-    /// the draw repeats. Returns null when the wall ran out, in which case the hand has ended.
-    /// </summary>
-    private static TileRef? TakeReplacement(GameState state, int seat, List<GameEvent> events)
-    {
-        while (true)
-        {
-            if (state.WallExhausted)
-            {
-                events.Add(EndAsDraw(state));
-                return null;
-            }
-
-            var tile = state.Wall[state.BackIndex--];
-            events.Add(new TileDrawn(tile, Replacement: true) { Seat = seat });
-
-            if (!tile.Tile.IsBonus) return tile;
-
-            var hand = state.Hands[seat];
-            hand.Bonus.Add(tile);
-            events.Add(new BonusExposed(tile, hand.Bonus.Count) { Seat = seat });
-        }
-    }
-
-    private static AmbitionEarned PayAmbition(GameState state, int seat, Ambition ambition) =>
-        new(ambition, Scorer.SettleAmbition(ambition, seat, state.Rules)) { Seat = seat };
-
-    private static HandEnded EndWithWin(
-        GameState state, int winnerSeat, int? discarderSeat, Tile winningTile, bool bisaklat)
-    {
-        var hand = state.Hands[winnerSeat];
-
-        // The scorer wants the hand as it stood before the winning tile arrived, so the wait can
-        // be reconstructed. How to get there depends on where the tile came from: a self-drawn
-        // tile is already sitting in the hand and has to be taken back out, whereas a tile claimed
-        // off a discard was never added, so the hand is already in the right state. Removing a
-        // copy in the claimed case would silently delete a tile the player really holds.
-        var before = hand.ConcealedFaces.ToList();
-
-        if (discarderSeat is null)
-        {
-            var index = before.IndexOf(winningTile);
-            if (index >= 0) before.RemoveAt(index);
-        }
-
-        var input = new WinInput(
-            before,
-            hand.Melds,
-            winningTile,
-            SelfDrawn: discarderSeat is null,
-            DiscardCount: state.Discards.Count(d => !d.Claimed),
-            Joker: state.Joker,
-            Bisaklat: bisaklat);
-
-        var score = Scorer.Score(input, state.Rules);
-        var settlements = Scorer.Settle(score, winnerSeat, discarderSeat, state.Rules);
-
-        var outcome = new HandOutcome(
-            bisaklat ? HandEndReason.Bisaklat : HandEndReason.Todas,
-            winnerSeat,
-            score,
-            settlements);
-
-        state.Outcome = outcome;
-        state.Phase = GamePhase.HandOver;
-        state.Pending = null;
-
-        return new HandEnded(outcome) { Seat = winnerSeat };
-    }
-
-    private static HandEnded EndAsDraw(GameState state)
-    {
-        var outcome = new HandOutcome(HandEndReason.WallExhausted, null, null, []);
-        state.Outcome = outcome;
-        state.Phase = GamePhase.HandOver;
-        state.Pending = null;
-
-        return new HandEnded(outcome);
-    }
-
-    private static List<TileRef> ResolveHeld(PlayerHand hand, IReadOnlyList<int> tileIds)
-    {
-        var resolved = new List<TileRef>(tileIds.Count);
-
-        foreach (var id in tileIds)
-        {
-            var match = hand.Concealed.FirstOrDefault(t => t.Id == id, new TileRef(-1));
-            if (match.Id < 0) throw new IllegalMoveException($"Tile {id} is not in hand.");
-            resolved.Add(match);
-        }
-
-        return resolved;
-    }
-
-    private static void Shuffle<T>(IList<T> items, Random rng)
-    {
-        for (var i = items.Count - 1; i > 0; i--)
-        {
-            var j = rng.Next(i + 1);
-            (items[i], items[j]) = (items[j], items[i]);
-        }
-    }
-
-    /// <summary>
-    /// Guard for every rule check. The attribute tells the compiler that a false condition never
-    /// returns, so nullable analysis trusts the checks that precede a dereference.
-    /// </summary>
-    private static void Require([DoesNotReturnIf(false)] bool condition, string message)
-    {
-        if (!condition) throw new IllegalMoveException(message);
-    }
+	public const int Seats = 4;
+
+	public const int HandSize = 16;
+
+	public static (GameState State, List<GameEvent> Events) Deal(RuleOptions rules, int handNumber, int manoSeat, int seed, DateTimeOffset now)
+	{
+		Random random = new Random(seed);
+		List<TileRef> list = TileSet.All.ToList();
+		Shuffle(list, random);
+		GameState gameState = new GameState
+		{
+			Rules = rules,
+			HandNumber = handNumber,
+			ManoSeat = manoSeat,
+			Seed = seed,
+			Wall = list,
+			FrontIndex = 0,
+			BackIndex = 143,
+			CurrentSeat = manoSeat
+		};
+		List<GameEvent> list2 = new List<GameEvent>
+		{
+			new HandDealt(handNumber, manoSeat)
+		};
+		for (int i = 0; i < 16; i++)
+		{
+			for (int j = 0; j < 4; j++)
+			{
+				gameState.Hands[(manoSeat + j) % 4].Concealed.Add(gameState.Wall[gameState.FrontIndex++]);
+			}
+		}
+		gameState.Hands[manoSeat].Concealed.Add(gameState.Wall[gameState.FrontIndex++]);
+		if (rules.JokerEnabled)
+		{
+			gameState.Joker = Tile.FromPlayableIndex(random.Next(34));
+			list2.Add(new JokerChosen(gameState.Joker.Value));
+		}
+		for (int k = 0; k < 4; k++)
+		{
+			int seat = (manoSeat + k) % 4;
+			list2.AddRange(ReplaceBonusTiles(gameState, seat));
+		}
+		foreach (int item in Enumerable.Range(0, 4))
+		{
+			int num = (manoSeat + item) % 4;
+			if (gameState.Hands[num].Bonus.Count == 0)
+			{
+				list2.Add(PayAmbition(gameState, num, Ambition.NoFlowers));
+			}
+		}
+		gameState.Phase = GamePhase.AwaitingDiscard;
+		List<TileRef> concealed = gameState.Hands[manoSeat].Concealed;
+		gameState.JustDrew = concealed[concealed.Count - 1];
+		PlayerHand playerHand = gameState.Hands[manoSeat];
+		if (HandAnalyzer.Analyze(playerHand.Concealed, playerHand.Melds, gameState.Joker, rules).IsWin)
+		{
+			list2.Add(EndWithWin(gameState, manoSeat, null, gameState.JustDrew.Value.Tile, bisaklat: true));
+			return (State: gameState, Events: list2);
+		}
+		list2.Add(new TurnChanged(GamePhase.AwaitingDiscard)
+		{
+			Seat = manoSeat
+		});
+		return (State: gameState, Events: list2);
+	}
+
+	public static List<GameEvent> Draw(GameState state, int seat, DateTimeOffset now)
+	{
+		List<GameEvent> list = new List<GameEvent>();
+		if (state.Phase == GamePhase.AwaitingClaims)
+		{
+			PendingClaim pending = state.Pending;
+			if (pending != null && seat == GameState.NextSeat(state.CurrentSeat))
+			{
+				Require(!pending.Declared.Any<KeyValuePair<int, DeclaredClaim>>((KeyValuePair<int, DeclaredClaim> kv) => kv.Key != seat && kv.Value.AwaitingTiles), "Somebody has called that tile and is still choosing which tiles it costs.");
+				pending.Declared.Remove(seat);
+				pending.Passed.Add(seat);
+				Disarm(pending);
+				list.AddRange(TryCloseClaimWindow(state, now, forced: true));
+				if (state.Phase != GamePhase.AwaitingDraw || state.CurrentSeat != seat)
+				{
+					return list;
+				}
+			}
+		}
+		Require(state.Phase == GamePhase.AwaitingDraw, "There is nothing to draw right now.");
+		Require(seat == state.CurrentSeat, $"It is seat {state.CurrentSeat}'s turn.");
+		if (state.WallExhausted)
+		{
+			list.Add(EndAsDraw(state));
+			return list;
+		}
+		TileRef tileRef = state.Wall[state.FrontIndex++];
+		list.Add(new TileDrawn(tileRef, Replacement: false)
+		{
+			Seat = seat
+		});
+		if (tileRef.Tile.IsBonus)
+		{
+			state.Hands[seat].Bonus.Add(tileRef);
+			list.Add(new BonusExposed(tileRef, state.Hands[seat].Bonus.Count)
+			{
+				Seat = seat
+			});
+			TileRef? tileRef2 = TakeReplacement(state, seat, list);
+			if (!tileRef2.HasValue)
+			{
+				return list;
+			}
+			tileRef = tileRef2.Value;
+		}
+		state.Hands[seat].Concealed.Add(tileRef);
+		state.JustDrew = tileRef;
+		state.Phase = GamePhase.AwaitingDiscard;
+		list.Add(new TurnChanged(GamePhase.AwaitingDiscard)
+		{
+			Seat = seat
+		});
+		return list;
+	}
+
+	public static List<GameEvent> Discard(GameState state, int seat, int tileId, DateTimeOffset now)
+	{
+		Require(state.Phase == GamePhase.AwaitingDiscard, "You cannot throw a tile right now.");
+		Require(seat == state.CurrentSeat, $"It is seat {state.CurrentSeat}'s turn.");
+		PlayerHand playerHand = state.Hands[seat];
+		int num = playerHand.Concealed.FindIndex((TileRef t) => t.Id == tileId);
+		Require(num >= 0, "That tile is not in your hand.");
+		TileRef tileRef = playerHand.Concealed[num];
+		Require(tileRef.Tile.IsPlayable, "A flower or season cannot be thrown.");
+		playerHand.Concealed.RemoveAt(num);
+		state.Discards.Add(new DiscardedTile(seat, tileRef));
+		state.JustDrew = null;
+		List<GameEvent> list = new List<GameEvent>
+		{
+			new TileDiscarded(tileRef)
+			{
+				Seat = seat
+			}
+		};
+		IReadOnlyDictionary<int, IReadOnlyList<ClaimKind>> readOnlyDictionary = AllowedClaims(state, tileRef, seat);
+		state.Phase = GamePhase.AwaitingClaims;
+		state.Pending = new PendingClaim
+		{
+			Tile = tileRef,
+			FromSeat = seat,
+			OpenedUtc = now,
+			DeadlineUtc = null
+		};
+		for (int num2 = 0; num2 < 4; num2++)
+		{
+			if (num2 != seat && state.BotSeats.Contains(num2) && !readOnlyDictionary.ContainsKey(num2))
+			{
+				state.Pending.Passed.Add(num2);
+			}
+		}
+		list.Add(new ClaimWindowOpened(tileRef, seat, state.Pending.DeadlineUtc, readOnlyDictionary)
+		{
+			Seat = seat
+		});
+		list.AddRange(TryCloseClaimWindow(state, now, forced: false));
+		return list;
+	}
+
+	private static void Arm(GameState state, PendingClaim pending, DateTimeOffset now)
+	{
+		DateTimeOffset? deadlineUtc = pending.DeadlineUtc;
+		DateTimeOffset valueOrDefault = deadlineUtc.GetValueOrDefault();
+		if (!deadlineUtc.HasValue)
+		{
+			valueOrDefault = now.AddSeconds(state.Rules.ClaimWindowSeconds);
+			DateTimeOffset? deadlineUtc2 = valueOrDefault;
+			pending.DeadlineUtc = deadlineUtc2;
+		}
+	}
+
+	private static void Disarm(PendingClaim pending)
+	{
+		if (!pending.Declared.Values.Any((DeclaredClaim c) => !c.AwaitingTiles))
+		{
+			pending.DeadlineUtc = null;
+		}
+	}
+
+	public static List<GameEvent> Pass(GameState state, int seat, DateTimeOffset now)
+	{
+		Require(state.Phase == GamePhase.AwaitingClaims && state.Pending != null, "There is no discard open to pass on.");
+		Require(seat != state.Pending.FromSeat, "You threw that tile, so there is nothing to pass on.");
+		state.Pending.Declared.Remove(seat);
+		state.Pending.Passed.Add(seat);
+		Disarm(state.Pending);
+		return TryCloseClaimWindow(state, now, forced: false);
+	}
+
+	public static List<GameEvent> Claim(GameState state, int seat, ClaimKind kind, IReadOnlyList<int> tileIds, DateTimeOffset now)
+	{
+		Require(state.Phase == GamePhase.AwaitingClaims && state.Pending != null, "That tile is no longer up for a claim.");
+		PendingClaim pending = state.Pending;
+		Require(seat != pending.FromSeat, "You threw that tile, so you cannot claim it.");
+		DeclaredClaim valueOrDefault = pending.Declared.GetValueOrDefault(seat);
+		Require((object)valueOrDefault == null || !valueOrDefault.AwaitingTiles || valueOrDefault.Kind != kind || tileIds.Count > 0, $"You have already called {kind}. Now tap the tiles in your hand it costs.", "AlreadyPressed");
+		bool condition = LiveKinds(state, pending, seat).Contains(kind);
+		(int, ClaimKind, bool)? tuple = StandingCall(state, pending);
+		object message;
+		if (tuple.HasValue)
+		{
+			(int, ClaimKind, bool) valueOrDefault2 = tuple.GetValueOrDefault();
+			message = $"{valueOrDefault2.Item2} has been called on that tile, and {kind} does not beat it.";
+		}
+		else
+		{
+			message = NoSuchClaim(kind);
+		}
+		Require(condition, (string)message, "Outranked");
+		IReadOnlyList<ClaimCandidate> source = ClaimCandidates(state, pending.Tile, pending.FromSeat, seat);
+		Require(source.Any((ClaimCandidate c) => c.Kind == kind), NoSuchClaim(kind), "CannotClaim");
+		IReadOnlyList<int> readOnlyList = Array.Empty<int>();
+		if (tileIds.Count > 0)
+		{
+			Require(tileIds.Distinct().Count() == tileIds.Count, "The same tile cannot be picked twice.");
+			List<TileRef> source2 = ResolveHeld(state.Hands[seat], tileIds);
+			List<string> picked = source2.Select((TileRef t) => t.Tile.Code).Order().ToList();
+			Require(source.Any((ClaimCandidate c) => c.Kind == kind && c.Support.Select((TileRef t) => t.Tile.Code).Order().SequenceEqual(picked)), $"The tiles you picked do not make a {kind} with that discard.", "TilesDoNotMake");
+			readOnlyList = source2.Select((TileRef t) => t.Id).ToList();
+		}
+		pending.Passed.Remove(seat);
+		bool flag = !state.Rules.AssistEnabled && readOnlyList.Count == 0 && kind != ClaimKind.Todas;
+		pending.Declared[seat] = new DeclaredClaim(kind, readOnlyList, flag);
+		if (!flag)
+		{
+			Arm(state, pending, now);
+		}
+		DropOutranked(state, pending);
+		return TryCloseClaimWindow(state, now, forced: false);
+	}
+
+	private static string NoSuchClaim(ClaimKind kind)
+	{
+		if (1 == 0)
+		{
+		}
+		string result = kind switch
+		{
+			ClaimKind.Chow => "You cannot chow that tile.", 
+			ClaimKind.Pung => "You cannot pung that tile: a pung needs two more of the same face in your hand.", 
+			ClaimKind.Kang => "You cannot kang that tile: a kang needs three more of the same face in your hand.", 
+			ClaimKind.Todas => "That tile does not finish your hand.", 
+			_ => $"You cannot {kind} that tile.", 
+		};
+		if (1 == 0)
+		{
+		}
+		return result;
+	}
+
+	public static List<GameEvent> Withdraw(GameState state, int seat)
+	{
+		Require(state.Phase == GamePhase.AwaitingClaims && state.Pending != null, "There is no discard open to take a call back on.");
+		PendingClaim pending = state.Pending;
+		Require(pending.Declared.ContainsKey(seat), "You have no call to take back on this tile.");
+		pending.Declared.Remove(seat);
+		foreach (int item in pending.Outranked)
+		{
+			pending.Passed.Remove(item);
+		}
+		pending.Outranked.Clear();
+		Disarm(pending);
+		return new List<GameEvent>();
+	}
+
+	public static List<GameEvent> ExpireClaimWindow(GameState state, DateTimeOffset now)
+	{
+		if (state.Phase == GamePhase.AwaitingClaims)
+		{
+			PendingClaim pending = state.Pending;
+			if (pending != null)
+			{
+				DateTimeOffset? deadlineUtc = pending.DeadlineUtc;
+				if (deadlineUtc.HasValue)
+				{
+					DateTimeOffset valueOrDefault = deadlineUtc.GetValueOrDefault();
+					if (!(valueOrDefault > now))
+					{
+						if (pending.Declared.Values.Any((DeclaredClaim c) => c.AwaitingTiles))
+						{
+							return new List<GameEvent>();
+						}
+						return TryCloseClaimWindow(state, now, forced: true);
+					}
+				}
+				return new List<GameEvent>();
+			}
+		}
+		return new List<GameEvent>();
+	}
+
+	public static List<GameEvent> DeclareSecretKang(GameState state, int seat, Tile face)
+	{
+		Require(state.Phase == GamePhase.AwaitingDiscard && seat == state.CurrentSeat, "You cannot declare a secret kang right now.");
+		PlayerHand playerHand = state.Hands[seat];
+		List<TileRef> list = playerHand.Concealed.Where((TileRef t) => t.Tile == face).Take(4).ToList();
+		Require(list.Count == 4, "You do not hold four of those.");
+		foreach (TileRef item in list)
+		{
+			playerHand.Concealed.Remove(item);
+		}
+		ExposedMeld exposedMeld = new ExposedMeld(SetKind.Kang, list, Concealed: true);
+		playerHand.Melds.Add(exposedMeld);
+		List<GameEvent> list2 = new List<GameEvent>
+		{
+			new MeldFormed(exposedMeld)
+			{
+				Seat = seat
+			}
+		};
+		list2.Add(PayAmbition(state, seat, Ambition.SecretKang));
+		TileRef? tileRef = TakeReplacement(state, seat, list2);
+		if (!tileRef.HasValue)
+		{
+			return list2;
+		}
+		playerHand.Concealed.Add(tileRef.Value);
+		state.JustDrew = tileRef.Value;
+		list2.Add(new TurnChanged(GamePhase.AwaitingDiscard)
+		{
+			Seat = seat
+		});
+		return list2;
+	}
+
+	public static List<GameEvent> DeclareSagasa(GameState state, int seat, Tile face)
+	{
+		Require(state.Phase == GamePhase.AwaitingDiscard && seat == state.CurrentSeat, "You cannot declare sagasa right now.");
+		PlayerHand playerHand = state.Hands[seat];
+		int num = playerHand.Melds.FindIndex((ExposedMeld m) => m.Kind == SetKind.Pung && m.BaseTile == face);
+		Require(num >= 0, "You have no pung of that tile on the table to extend.");
+		TileRef tileRef = playerHand.Concealed.FirstOrDefault((TileRef t) => t.Tile == face, new TileRef(-1));
+		Require(tileRef.Id >= 0, "You are not holding the fourth one.");
+		playerHand.Concealed.Remove(tileRef);
+		ExposedMeld exposedMeld = playerHand.Melds[num];
+		ExposedMeld exposedMeld4 = exposedMeld with
+		{
+			Kind = SetKind.Kang,
+			Tiles = [.. exposedMeld.Tiles, tileRef],
+			FromSagasa = true
+		};
+		playerHand.Melds[num] = exposedMeld4;
+		List<GameEvent> list = new List<GameEvent>
+		{
+			new MeldFormed(exposedMeld4)
+			{
+				Seat = seat
+			}
+		};
+		list.Add(PayAmbition(state, seat, Ambition.Sagasa));
+		TileRef? tileRef2 = TakeReplacement(state, seat, list);
+		if (!tileRef2.HasValue)
+		{
+			return list;
+		}
+		playerHand.Concealed.Add(tileRef2.Value);
+		state.JustDrew = tileRef2.Value;
+		list.Add(new TurnChanged(GamePhase.AwaitingDiscard)
+		{
+			Seat = seat
+		});
+		return list;
+	}
+
+	public static List<GameEvent> DeclareTodasOnDraw(GameState state, int seat)
+	{
+		Require(state.Phase == GamePhase.AwaitingDiscard && seat == state.CurrentSeat, "You cannot declare todas right now.");
+		Require(state.JustDrew.HasValue, "There is no drawn tile to win on.");
+		PlayerHand playerHand = state.Hands[seat];
+		Require(HandAnalyzer.Analyze(playerHand.Concealed, playerHand.Melds, state.Joker, state.Rules).IsWin, "Your hand is not complete.");
+		int num = 1;
+		List<GameEvent> list = new List<GameEvent>(num);
+		CollectionsMarshal.SetCount(list, num);
+		CollectionsMarshal.AsSpan(list)[0] = EndWithWin(state, seat, null, state.JustDrew.Value.Tile, bisaklat: false);
+		return list;
+	}
+
+	public static IReadOnlyDictionary<int, IReadOnlyList<ClaimKind>> AllowedClaims(GameState state, TileRef discard, int fromSeat)
+	{
+		Dictionary<int, IReadOnlyList<ClaimKind>> dictionary = new Dictionary<int, IReadOnlyList<ClaimKind>>();
+		for (int i = 0; i < 4; i++)
+		{
+			if (i != fromSeat)
+			{
+				List<ClaimKind> list = (from c in ClaimCandidates(state, discard, fromSeat, i)
+					select c.Kind).Distinct().ToList();
+				if (list.Count > 0)
+				{
+					dictionary[i] = list;
+				}
+			}
+		}
+		return dictionary;
+	}
+
+	public static IReadOnlyList<ClaimCandidate> ClaimCandidates(GameState state, TileRef discard, int fromSeat, int seat)
+	{
+		if (seat == fromSeat || seat < 0 || seat >= 4)
+		{
+			return Array.Empty<ClaimCandidate>();
+		}
+		PlayerHand playerHand = state.Hands[seat];
+		Tile face = discard.Tile;
+		List<ClaimCandidate> list = new List<ClaimCandidate>();
+		if (CanWinOn(state, seat, face))
+		{
+			list.Add(new ClaimCandidate(ClaimKind.Todas, Array.Empty<TileRef>()));
+		}
+		List<TileRef> list2 = playerHand.Concealed.Where((TileRef t) => t.Tile == face).ToList();
+		if (list2.Count >= 3)
+		{
+			list.Add(new ClaimCandidate(ClaimKind.Kang, list2.Take(3).ToList()));
+		}
+		if (list2.Count >= 2)
+		{
+			list.Add(new ClaimCandidate(ClaimKind.Pung, list2.Take(2).ToList()));
+		}
+		if (ChowPossible(state, discard, fromSeat, seat))
+		{
+			foreach (List<TileRef> item in RunPartners(playerHand, face))
+			{
+				list.Add(new ClaimCandidate(ClaimKind.Chow, item));
+			}
+		}
+		return list;
+	}
+
+	public static bool ChowPossible(GameState state, TileRef discard, int fromSeat, int seat)
+	{
+		return seat != fromSeat && discard.Tile.IsSuited && (!state.Rules.ChowFromLeftOnly || GameState.IsLeftOf(seat, fromSeat));
+	}
+
+	private static bool CanWinOn(GameState state, int seat, Tile face)
+	{
+		PlayerHand playerHand = state.Hands[seat];
+		List<Tile> concealed = playerHand.ConcealedFaces.Append(face).ToList();
+		if (!HandAnalyzer.Analyze(concealed, playerHand.Melds, state.Joker, state.Rules).IsWin)
+		{
+			return false;
+		}
+		if (!state.Rules.JokerCanCompleteClaimedWin && state.Joker.HasValue)
+		{
+			return HandAnalyzer.Analyze(concealed, playerHand.Melds, null, state.Rules).IsWin;
+		}
+		return true;
+	}
+
+	private static List<List<TileRef>> RunPartners(PlayerHand hand, Tile face)
+	{
+		List<List<TileRef>> list = new List<List<TileRef>>();
+		if (!face.IsSuited)
+		{
+			return list;
+		}
+		int[] array = new int[3]
+		{
+			face.Rank - 2,
+			face.Rank - 1,
+			face.Rank
+		};
+		foreach (int num in array)
+		{
+			if (num < 1 || num + 2 > 9)
+			{
+				continue;
+			}
+			List<int> list2 = new int[3]
+			{
+				num,
+				num + 1,
+				num + 2
+			}.Where((int r) => r != face.Rank).ToList();
+			if (list2.Count == 2)
+			{
+				TileRef? tileRef = Find(list2[0]);
+				TileRef? tileRef2 = Find(list2[1]);
+				if (tileRef.HasValue && tileRef2.HasValue)
+				{
+					int num2 = 2;
+					List<TileRef> list3 = new List<TileRef>(num2);
+					CollectionsMarshal.SetCount(list3, num2);
+					Span<TileRef> span = CollectionsMarshal.AsSpan(list3);
+					span[0] = tileRef.Value;
+					span[1] = tileRef2.Value;
+					list.Add(list3);
+				}
+			}
+		}
+		return list;
+		TileRef? Find(int rank)
+		{
+			if ((rank < 1 || rank > 9) ? true : false)
+			{
+				return null;
+			}
+			Tile wanted = new Tile(face.Suit, rank);
+			TileRef value = hand.Concealed.FirstOrDefault((TileRef t) => t.Tile == wanted, new TileRef(-1));
+			return (value.Id >= 0) ? new TileRef?(value) : ((TileRef?)null);
+		}
+	}
+
+	public static int ClaimRank(RuleOptions rules, ClaimKind kind)
+	{
+		if (1 == 0)
+		{
+		}
+		int result = kind switch
+		{
+			ClaimKind.Todas => (!rules.TodasBeatsPungAndKang) ? 1 : 3, 
+			ClaimKind.Kang => 2, 
+			ClaimKind.Pung => 2, 
+			ClaimKind.Chow => 0, 
+			_ => -1, 
+		};
+		if (1 == 0)
+		{
+		}
+		return result;
+	}
+
+	public static (int Seat, ClaimKind Kind, bool AwaitingTiles)? StandingCall(GameState state, PendingClaim pending)
+	{
+		if (pending.Declared.Count == 0)
+		{
+			return null;
+		}
+		KeyValuePair<int, DeclaredClaim> keyValuePair = (from kv in pending.Declared
+			orderby ClaimRank(state.Rules, kv.Value.Kind) descending, (kv.Key - pending.FromSeat + 4) % 4
+			select kv).First();
+		return (keyValuePair.Key, keyValuePair.Value.Kind, keyValuePair.Value.AwaitingTiles);
+	}
+
+	public static IReadOnlyList<ClaimKind> LiveKinds(GameState state, PendingClaim pending, int seat)
+	{
+		ClaimKind[] array = new ClaimKind[4]
+		{
+			ClaimKind.Chow,
+			ClaimKind.Pung,
+			ClaimKind.Kang,
+			ClaimKind.Todas
+		};
+		if (seat == pending.FromSeat)
+		{
+			return Array.Empty<ClaimKind>();
+		}
+		if (pending.Outranked.Contains(seat))
+		{
+			return Array.Empty<ClaimKind>();
+		}
+		(int, ClaimKind, bool)? tuple = StandingCall(state, pending);
+		if (tuple.HasValue)
+		{
+			(int Seat, ClaimKind Kind, bool AwaitingTiles) standing = tuple.GetValueOrDefault();
+			if (standing.Seat != seat)
+			{
+				int bar = ClaimRank(state.Rules, standing.Kind);
+				return array.Where(delegate(ClaimKind kind)
+				{
+					int num = ClaimRank(state.Rules, kind);
+					if (num != bar)
+					{
+						return num > bar;
+					}
+					ClaimKind item = standing.Kind;
+					bool flag = (uint)(item - 1) <= 1u;
+					return !flag;
+				}).ToList();
+			}
+		}
+		return array;
+	}
+
+	private static void DropOutranked(GameState state, PendingClaim pending)
+	{
+		int num = (from kv in pending.Declared
+			where !kv.Value.AwaitingTiles
+			select ClaimRank(state.Rules, kv.Value.Kind)).DefaultIfEmpty(int.MinValue).Max();
+		foreach (var (num3, declaredClaim2) in pending.Declared.ToList())
+		{
+			if (ClaimRank(state.Rules, declaredClaim2.Kind) < num)
+			{
+				pending.Declared.Remove(num3);
+				pending.Outranked.Add(num3);
+				pending.Passed.Add(num3);
+			}
+		}
+	}
+
+	private static List<GameEvent> TryCloseClaimWindow(GameState state, DateTimeOffset now, bool forced)
+	{
+		PendingClaim pending = state.Pending;
+		if (!forced && pending.Declared.Values.Any((DeclaredClaim c) => c.AwaitingTiles))
+		{
+			return new List<GameEvent>();
+		}
+		int num = pending.Declared.Count + pending.Passed.Count;
+		if (!forced && num < 3)
+		{
+			return new List<GameEvent>();
+		}
+		foreach (int item in (from kv in pending.Declared
+			where kv.Value.AwaitingTiles
+			select kv.Key).ToList())
+		{
+			pending.Declared.Remove(item);
+			pending.Outranked.Add(item);
+			pending.Passed.Add(item);
+		}
+		if (pending.Declared.Count == 0)
+		{
+			state.Pending = null;
+			List<GameEvent> list = new List<GameEvent>
+			{
+				new ClaimWindowClosed(pending.Tile)
+			};
+			list.AddRange(AdvanceTurn(state));
+			return list;
+		}
+		(int, DeclaredClaim) tuple = PickWinningClaim(state, pending);
+		return ApplyClaim(state, tuple.Item1, tuple.Item2, pending);
+	}
+
+	private static (int Seat, DeclaredClaim Claim) PickWinningClaim(GameState state, PendingClaim pending)
+	{
+		return (from kv in pending.Declared
+			orderby ClaimRank(state.Rules, kv.Value.Kind) descending, Distance(kv.Key)
+			select (Seat: kv.Key, Claim: kv.Value)).First();
+		int Distance(int seat)
+		{
+			return (seat - pending.FromSeat + 4) % 4;
+		}
+	}
+
+	private static List<GameEvent> ApplyClaim(GameState state, int seat, DeclaredClaim declared, PendingClaim pending)
+	{
+		ClaimKind kind = declared.Kind;
+		PlayerHand playerHand = state.Hands[seat];
+		Tile face = pending.Tile.Tile;
+		List<GameEvent> list = new List<GameEvent>();
+		int index = state.Discards.Count - 1;
+		state.Discards[index] = state.Discards[index]with
+		{
+			Claimed = true
+		};
+		state.Pending = null;
+		if (kind == ClaimKind.Todas)
+		{
+			list.Add(EndWithWin(state, seat, pending.FromSeat, pending.Tile.Tile, bisaklat: false));
+			return list;
+		}
+		if (1 == 0)
+		{
+		}
+		int num = kind switch
+		{
+			ClaimKind.Kang => 3, 
+			ClaimKind.Pung => 2, 
+			ClaimKind.Chow => 2, 
+			_ => throw new IllegalMoveException($"Cannot apply claim {kind}."), 
+		};
+		if (1 == 0)
+		{
+		}
+		int num2 = num;
+		List<TileRef> list2;
+		if (declared.TileIds.Count > 0)
+		{
+			list2 = ResolveHeld(playerHand, declared.TileIds);
+			if (list2.Count != num2)
+			{
+				throw new IllegalMoveException($"Seat {seat} named {list2.Count} tiles for a {kind}, which needs {num2}.");
+			}
+		}
+		else if (kind == ClaimKind.Chow)
+		{
+			list2 = RunPartners(playerHand, face).FirstOrDefault() ?? throw new IllegalMoveException($"Seat {seat} can no longer form a run with {face}.");
+		}
+		else
+		{
+			list2 = playerHand.Concealed.Where((TileRef t) => t.Tile == face).Take(num2).ToList();
+			if (list2.Count != num2)
+			{
+				throw new IllegalMoveException($"Seat {seat} no longer holds {num2} copies of {face}.");
+			}
+		}
+		foreach (TileRef item in list2)
+		{
+			playerHand.Concealed.Remove(item);
+		}
+		int kind2 = kind switch
+		{
+			ClaimKind.Kang => 3, 
+			ClaimKind.Chow => 1, 
+			_ => 2, 
+		};
+		List<TileRef> list3 = list2;
+		num = 0;
+		TileRef[] array = new TileRef[1 + list3.Count];
+		Span<TileRef> span = CollectionsMarshal.AsSpan(list3);
+		span.CopyTo(new Span<TileRef>(array).Slice(num, span.Length));
+		num += span.Length;
+		array[num] = pending.Tile;
+		ExposedMeld exposedMeld = new ExposedMeld((SetKind)kind2, array, Concealed: false, pending.FromSeat);
+		playerHand.Melds.Add(exposedMeld);
+		list.Add(new MeldFormed(exposedMeld)
+		{
+			Seat = seat
+		});
+		state.CurrentSeat = seat;
+		if (kind == ClaimKind.Kang)
+		{
+			list.Add(PayAmbition(state, seat, Ambition.Kang));
+			TileRef? tileRef = TakeReplacement(state, seat, list);
+			if (!tileRef.HasValue)
+			{
+				return list;
+			}
+			playerHand.Concealed.Add(tileRef.Value);
+			state.JustDrew = tileRef.Value;
+		}
+		else
+		{
+			state.JustDrew = null;
+		}
+		state.Phase = GamePhase.AwaitingDiscard;
+		list.Add(new TurnChanged(GamePhase.AwaitingDiscard)
+		{
+			Seat = seat
+		});
+		return list;
+	}
+
+	private static List<GameEvent> AdvanceTurn(GameState state)
+	{
+		List<GameEvent> list = new List<GameEvent>();
+		state.CurrentSeat = GameState.NextSeat(state.CurrentSeat);
+		state.JustDrew = null;
+		if (state.WallExhausted)
+		{
+			list.Add(EndAsDraw(state));
+			return list;
+		}
+		state.Phase = GamePhase.AwaitingDraw;
+		list.Add(new TurnChanged(GamePhase.AwaitingDraw)
+		{
+			Seat = state.CurrentSeat
+		});
+		return list;
+	}
+
+	private static List<GameEvent> ReplaceBonusTiles(GameState state, int seat)
+	{
+		List<GameEvent> list = new List<GameEvent>();
+		PlayerHand playerHand = state.Hands[seat];
+		while (true)
+		{
+			int num = playerHand.Concealed.FindIndex((TileRef t) => t.Tile.IsBonus);
+			if (num < 0)
+			{
+				break;
+			}
+			TileRef tileRef = playerHand.Concealed[num];
+			playerHand.Concealed.RemoveAt(num);
+			playerHand.Bonus.Add(tileRef);
+			list.Add(new BonusExposed(tileRef, playerHand.Bonus.Count)
+			{
+				Seat = seat
+			});
+			TileRef? tileRef2 = TakeReplacement(state, seat, list);
+			if (!tileRef2.HasValue)
+			{
+				break;
+			}
+			playerHand.Concealed.Add(tileRef2.Value);
+		}
+		return list;
+	}
+
+	private static TileRef? TakeReplacement(GameState state, int seat, List<GameEvent> events)
+	{
+		TileRef tileRef;
+		while (true)
+		{
+			if (state.WallExhausted)
+			{
+				events.Add(EndAsDraw(state));
+				return null;
+			}
+			tileRef = state.Wall[state.BackIndex--];
+			events.Add(new TileDrawn(tileRef, Replacement: true)
+			{
+				Seat = seat
+			});
+			if (!tileRef.Tile.IsBonus)
+			{
+				break;
+			}
+			PlayerHand playerHand = state.Hands[seat];
+			playerHand.Bonus.Add(tileRef);
+			events.Add(new BonusExposed(tileRef, playerHand.Bonus.Count)
+			{
+				Seat = seat
+			});
+		}
+		return tileRef;
+	}
+
+	private static AmbitionEarned PayAmbition(GameState state, int seat, Ambition ambition)
+	{
+		return new AmbitionEarned(ambition, Scorer.SettleAmbition(ambition, seat, state.Rules))
+		{
+			Seat = seat
+		};
+	}
+
+	private static HandEnded EndWithWin(GameState state, int winnerSeat, int? discarderSeat, Tile winningTile, bool bisaklat)
+	{
+		PlayerHand playerHand = state.Hands[winnerSeat];
+		List<Tile> list = playerHand.ConcealedFaces.ToList();
+		if (!discarderSeat.HasValue)
+		{
+			int num = list.IndexOf(winningTile);
+			if (num >= 0)
+			{
+				list.RemoveAt(num);
+			}
+		}
+		WinInput input = new WinInput(list, playerHand.Melds, winningTile, !discarderSeat.HasValue, state.Discards.Count((DiscardedTile d) => !d.Claimed), state.Joker, bisaklat);
+		HandScore score = Scorer.Score(input, state.Rules);
+		IReadOnlyList<Settlement> settlements = Scorer.Settle(score, winnerSeat, discarderSeat, state.Rules);
+		HandOutcome outcome = (state.Outcome = new HandOutcome(bisaklat ? HandEndReason.Bisaklat : HandEndReason.Todas, winnerSeat, score, settlements));
+		state.Phase = GamePhase.HandOver;
+		state.Pending = null;
+		return new HandEnded(outcome)
+		{
+			Seat = winnerSeat
+		};
+	}
+
+	private static HandEnded EndAsDraw(GameState state)
+	{
+		HandOutcome outcome = (state.Outcome = new HandOutcome(HandEndReason.WallExhausted, null, null, Array.Empty<Settlement>()));
+		state.Phase = GamePhase.HandOver;
+		state.Pending = null;
+		return new HandEnded(outcome);
+	}
+
+	private static List<TileRef> ResolveHeld(PlayerHand hand, IReadOnlyList<int> tileIds)
+	{
+		List<TileRef> list = new List<TileRef>(tileIds.Count);
+		foreach (int id in tileIds)
+		{
+			TileRef item = hand.Concealed.FirstOrDefault((TileRef t) => t.Id == id, new TileRef(-1));
+			if (item.Id < 0)
+			{
+				throw new IllegalMoveException($"Tile {id} is not in hand.");
+			}
+			list.Add(item);
+		}
+		return list;
+	}
+
+	private static void Shuffle<T>(IList<T> items, Random rng)
+	{
+		for (int num = items.Count - 1; num > 0; num--)
+		{
+			int num2 = rng.Next(num + 1);
+			int index = num;
+			int index2 = num2;
+			T value = items[num2];
+			T value2 = items[num];
+			items[index] = value;
+			items[index2] = value2;
+		}
+	}
+
+	private static void Require([DoesNotReturnIf(false)] bool condition, string message, string? code = null)
+	{
+		if (!condition)
+		{
+			throw new IllegalMoveException(message, code);
+		}
+	}
 }
