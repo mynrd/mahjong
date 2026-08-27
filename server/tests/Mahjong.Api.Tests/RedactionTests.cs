@@ -65,6 +65,47 @@ public class RedactionTests
     }
 
     [Fact]
+    public void A_revealed_hand_is_still_withheld_while_the_hand_is_being_played()
+    {
+        var state = Dealt();
+
+        // Nothing can put a seat in here mid-hand - the request is refused before it gets this far.
+        // Checked anyway: this builder is the last thing between the state and the wire, and it is
+        // not entitled to assume the caller got the phase right.
+        var view = GameViewBuilder.Build(state, "ABC123", forSeat: 1, Seats, new HashSet<int> { 0 });
+
+        Assert.Null(view.Seats[0].Concealed);
+        Assert.False(view.Seats[0].Revealed);
+    }
+
+    [Fact]
+    public void A_seat_that_shows_its_hand_after_the_hand_is_over_is_seen_by_everybody()
+    {
+        var state = Dealt();
+        state.Phase = GamePhase.HandOver;
+
+        var view = GameViewBuilder.Build(state, "ABC123", forSeat: 1, Seats, new HashSet<int> { 0 });
+
+        var shown = view.Seats[0];
+        Assert.True(shown.Revealed);
+        Assert.NotNull(shown.Concealed);
+        Assert.Equal(
+            state.Hands[0].Concealed.Select(t => t.Id).Order(),
+            shown.Concealed!.Select(t => t.Id).Order());
+
+        // One seat showing says nothing about the other two, who did not.
+        foreach (var seat in new[] { 2, 3 })
+        {
+            Assert.False(view.Seats[seat].Revealed);
+            Assert.Null(view.Seats[seat].Concealed);
+        }
+
+        // Showing your tiles is not showing how you had them arranged: the grouping is read off the
+        // hand for its owner's own screen and is nobody else's business.
+        Assert.Null(shown.Groups);
+    }
+
+    [Fact]
     public void A_player_gets_their_own_hand_grouped_for_auto_arrange()
     {
         var state = Dealt();

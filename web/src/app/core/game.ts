@@ -41,6 +41,9 @@ export class Game {
   readonly lastFailure = signal<MoveFailure | null>(null);
   readonly messages = signal<TableMessage[]>([]);
 
+  /** Why this browser no longer holds a seat, once it no longer holds one. */
+  readonly removed = signal<string | null>(null);
+
   private hub: signalR.HubConnection | null = null;
   private messageId = 0;
 
@@ -48,6 +51,7 @@ export class Game {
     await this.disconnect();
 
     this.connection.set('connecting');
+    this.removed.set(null);
 
     const hub = new signalR.HubConnectionBuilder()
       .withUrl(`${apiBaseUrl()}/hubs/game?access_token=${encodeURIComponent(token)}`)
@@ -58,6 +62,11 @@ export class Game {
       .build();
 
     hub.on('StateChanged', (view: PlayerGameView) => this.view.set(view));
+
+    // The seat is gone from under this browser: left of its own accord, or freed by the host. The
+    // token stops resolving the moment the row goes, so the page has to be told rather than left to
+    // discover it as a string of failures.
+    hub.on('Removed', (reason: string) => this.removed.set(reason));
 
     hub.on('SeatConnected', (_seat: number, name: string) => this.say(`${name} connected`));
     hub.on('SeatDisconnected', (seat: number) => {
@@ -126,6 +135,45 @@ export class Game {
 
   declareTodas(): Promise<boolean> {
     return this.invoke('DeclareTodas');
+  }
+
+  /**
+   * Turns your hand face up for the other three, once the hand is over. There is no way back: the
+   * table has seen them by the time you could press anything else, and the next deal clears it.
+   */
+  reveal(): Promise<boolean> {
+    return this.invoke('Reveal');
+  }
+
+  // ---------------------------------------------------------------- the next game
+
+  /** Host only: offer another game to the table. It deals when all four seats have said yes. */
+  proposeNewGame(): Promise<boolean> {
+    return this.invoke('ProposeNewGame');
+  }
+
+  /** Host only: take the offer back. */
+  cancelNewGame(): Promise<boolean> {
+    return this.invoke('CancelNewGame');
+  }
+
+  /** Host only: sit a bot in every seat still empty. */
+  fillWithBots(): Promise<boolean> {
+    return this.invoke('FillWithBots');
+  }
+
+  /** Host only: free the seat of somebody who has stopped answering. */
+  removeSeat(seat: number): Promise<boolean> {
+    return this.invoke('RemoveSeat', seat);
+  }
+
+  acceptNewGame(): Promise<boolean> {
+    return this.invoke('AcceptNewGame');
+  }
+
+  /** Says no, and leaves: there is no third state where you sit at a table you declined to play. */
+  declineNewGame(): Promise<boolean> {
+    return this.invoke('DeclineNewGame');
   }
 
   // ---------------------------------------------------------------- hand arrangement

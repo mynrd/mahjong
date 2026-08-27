@@ -109,6 +109,73 @@ public sealed class GameHub(
 
     public Task<Result> DeclareTodas() => Move(new GameMove.Todas());
 
+    // ------------------------------------------------------------------ after the hand
+
+    /// <summary>
+    /// Turns this seat's hand face up for the other three, once the hand is over. Not a move: it
+    /// changes nothing the rules can see, which is why it does not go through <see cref="Move"/>.
+    /// </summary>
+    public async Task<Result> Reveal()
+    {
+        if (Context.Items[RoomKey] is not string code || Context.Items[SeatKey] is not int seat)
+            return Result.Fail("NotSeated");
+
+        return await games.RevealAsync(code, seat);
+    }
+
+    // ------------------------------------------------------------------ the next game
+    //
+    // Calling a game does not deal one: everybody answers for themselves and the caller waits with
+    // them. All six of these go over the hub rather than REST because the whole point is that the
+    // other three watch the answers arrive.
+
+    /// <summary>Host only: offers another game to the table.</summary>
+    public Task<Result> ProposeNewGame() => AsHost(games.ProposeNewGameAsync);
+
+    /// <summary>Host only: takes the offer back.</summary>
+    public Task<Result> CancelNewGame() => AsHost(games.CancelNewGameAsync);
+
+    /// <summary>Host only: sits a bot in every seat still empty.</summary>
+    public Task<Result> FillWithBots() => AsHost(games.FillSeatsWithBotsAsync);
+
+    /// <summary>Host only: frees the seat of somebody who has stopped answering.</summary>
+    public async Task<Result> RemoveSeat(int seat)
+    {
+        if (Context.Items[RoomKey] is not string code || Context.Items[PlayerKey] is not Guid playerId)
+            return Result.Fail("NotSeated");
+
+        return await games.RemoveSeatAsync(code, playerId, seat);
+    }
+
+    /// <summary>Says yes to the offer.</summary>
+    public async Task<Result> AcceptNewGame()
+    {
+        if (Context.Items[RoomKey] is not string code || Context.Items[SeatKey] is not int seat)
+            return Result.Fail("NotSeated");
+
+        return await games.AcceptNewGameAsync(code, seat);
+    }
+
+    /// <summary>
+    /// Says no, and leaves. Saying no to another game is leaving the table: there is no third state
+    /// where somebody sits at a table they have declined to play at.
+    /// </summary>
+    public async Task<Result> DeclineNewGame()
+    {
+        if (Context.Items[RoomKey] is not string code || Context.Items[PlayerKey] is not Guid playerId)
+            return Result.Fail("NotSeated");
+
+        return await games.LeaveTableAsync(code, playerId);
+    }
+
+    private async Task<Result> AsHost(Func<string, Guid, CancellationToken, Task<Result>> action)
+    {
+        if (Context.Items[RoomKey] is not string code || Context.Items[PlayerKey] is not Guid playerId)
+            return Result.Fail("NotSeated");
+
+        return await action(code, playerId, CancellationToken.None);
+    }
+
     // ------------------------------------------------------------------ hand arrangement
     //
     // How this seat has laid its own tiles out. Not a move and not rules state: nothing here

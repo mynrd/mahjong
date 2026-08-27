@@ -41,6 +41,42 @@ public sealed class RoomSession(Guid roomId, string code)
     /// <summary>When a bot is next allowed to move, so bots do not play instantly and unreadably.</summary>
     public DateTimeOffset BotNotBefore { get; set; } = DateTimeOffset.MinValue;
 
+    /// <summary>
+    /// Seats that have turned their hand face up for the hand just finished.
+    ///
+    /// Held here rather than on <see cref="GameState"/> because it is not a fact about the rules:
+    /// nothing in the engine reads it, and a hand plays out identically whether every seat showed
+    /// or none did. It is per hand and cleared on the next deal, so a player who showed once is not
+    /// showing for the rest of the evening.
+    ///
+    /// Replaced whole rather than mutated. Reads happen outside the session gate - a client that
+    /// has just connected builds its view without taking it - and swapping the reference means a
+    /// reader either sees the old set or the new one, never a half-written one.
+    /// </summary>
+    public IReadOnlySet<int> RevealedSeats { get; private set; } = new HashSet<int>();
+
+    public void Reveal(int seat) => RevealedSeats = new HashSet<int>(RevealedSeats) { seat };
+
+    public void ClearReveals() => RevealedSeats = new HashSet<int>();
+
+    /// <summary>
+    /// The standing offer of another game, or null when nobody has called one.
+    ///
+    /// Here for the same reasons as the reveals above: it is not a fact about the rules, it lasts
+    /// only as long as the gap between two hands, and it is read outside the session gate while
+    /// views are being built - so it is swapped whole rather than edited in place.
+    /// </summary>
+    public NewGameProposal? Proposal { get; private set; }
+
+    public void Propose(NewGameProposal proposal) => Proposal = proposal;
+
+    public void Accept(int seat) => Proposal = Proposal?.With(seat);
+
+    /// <summary>Drops a seat's answer, for a player who has left or been removed.</summary>
+    public void Vacate(int seat) => Proposal = Proposal?.Without(seat);
+
+    public void ClearProposal() => Proposal = null;
+
     public async Task<T> RunAsync<T>(Func<Task<T>> action, CancellationToken cancel = default)
     {
         await _gate.WaitAsync(cancel);

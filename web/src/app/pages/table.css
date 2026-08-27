@@ -348,6 +348,13 @@
   --tile-w: var(--tile-sm);
 }
 
+/* A hand its owner turned face up after the hand ended. Drawn like the sets below it rather than
+   like the row of backs it replaces: these are faces to be read, not a shape to be counted. */
+.hidden-hand.shown {
+  gap: 2px;
+  --tile-w: calc(var(--tile-sm) + 2px);
+}
+
 .melds,
 .bonus {
   display: flex;
@@ -664,6 +671,16 @@
   min-width: 0;
 }
 
+/* The finished hand's two offers side by side: the result, and showing your tiles. Same one-line
+   rule as everything else in the bar - it shrinks rather than pushing the bar taller. */
+.over {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
 .btn.draw {
   flex: 0 0 auto;
   min-width: 76px;
@@ -757,6 +774,17 @@
   flex-wrap: nowrap;
   gap: 8px;
   justify-content: center;
+}
+
+/* Take names the set it would make - "Take - Chow B3-B4-B5" - which is worth reading and is also
+   longer than a bar button. It gives way before the thrown tile or Pass do, and ellipses rather
+   than pushing them off the row. */
+.claim-buttons .btn.take {
+  min-width: 0;
+  max-width: min(15rem, 45vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .claim-tile {
@@ -1199,6 +1227,127 @@
   min-height: 100dvh;
   padding: 20px;
   text-align: center;
+}
+
+/* ------------------------------------------------------------------ the next game
+
+   Between the pool and your own hand, in the flow rather than over it. A finished table is there to
+   be looked at, and a modal asking about the next game would be the result dialog again wearing a
+   different hat. */
+
+.next-game {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 10px 0 0;
+  padding: 14px;
+}
+
+.next-game h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.next-game header p {
+  margin: 4px 0 0;
+  font-size: 13px;
+}
+
+.answers {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.answers li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  font-size: 14px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: var(--radius-sm);
+}
+
+.answers li.empty {
+  border: 1px dashed var(--line);
+  background: none;
+}
+
+.answers .who {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Word and colour together, never colour alone: half the point of this list is being readable at a
+   glance from across a room, and the other half is being readable at all. */
+.answers .state {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.answers .state.in {
+  color: var(--gold);
+}
+
+.answers .state.waiting {
+  color: var(--text-dim);
+}
+
+.answer-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.answer-buttons p {
+  margin: 0;
+  font-size: 14px;
+}
+
+.host-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+/* Its own row. Sharing one with the buttons squeezed a URL down to a single character and an
+   ellipsis, which is not a link anybody can read off a screen and type into a phone. */
+.next-game .invite {
+  display: flex;
+  flex: 1 0 100%;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.next-game .link {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+}
+
+.btn.tiny {
+  min-height: 32px;
+  padding: 6px 12px;
+  font-size: 13px;
 }
 
 /* ------------------------------------------------------------------ bigger screens */

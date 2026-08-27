@@ -35,17 +35,23 @@ export interface HandGroupView {
 
 export interface SeatStateView {
   seat: number;
+  /** Null when nobody is sitting there: a player who leaves frees their seat until it is filled. */
   displayName: string | null;
   isBot: boolean;
   isConnected: boolean;
   concealedCount: number;
-  /** Filled in only for your own seat. Null for everyone else, by design. */
+  /**
+   * Filled in for your own seat, and for a seat that has turned its hand face up now the hand is
+   * over. Null for everyone else, by design.
+   */
   concealed: TileView[] | null;
-  /** Also your own seat only: it is read off `concealed`, so it gives away the same thing. */
+  /** Your own seat only: it is read off `concealed`, so it gives away the same thing. */
   groups: HandGroupView[] | null;
   melds: MeldView[];
   bonus: TileView[];
   balance: number;
+  /** This seat has shown its hand to the table. Only ever true once the hand is over. */
+  revealed: boolean;
 }
 
 export interface DiscardView {
@@ -162,6 +168,14 @@ export interface PlayerGameView {
   yourTurn: TurnOptionsView | null;
   outcome: OutcomeView | null;
   /**
+   * The seat that made the table. Sent so the actions only that seat has - calling the next game,
+   * freeing a seat that has stopped answering - are drawn from what the server says rather than
+   * from what this browser remembers about itself.
+   */
+  hostSeat: number | null;
+  /** The offer of another game, or null when nobody has called one. */
+  newGame: NewGameView | null;
+  /**
    * Whether this table lets the server help. Off, no claim is spelled out and no hand is laid out
    * for you: the claim strip is four bare buttons and Auto Arrange is gone.
    */
@@ -216,6 +230,19 @@ export interface ReplaySeatView {
   melds: MeldView[];
   bonus: TileView[];
   balance: number;
+}
+
+/**
+ * The standing offer of another game.
+ *
+ * Everybody gets the same list, on purpose: the reason the table asks rather than simply dealing is
+ * so people can see who it is waiting on, and an answer sheet only the host could read would be the
+ * same silence with an extra step.
+ */
+export interface NewGameView {
+  proposedBySeat: number;
+  /** Seats that have said yes. An empty seat is never in here - it has nobody to answer for it. */
+  accepted: number[];
 }
 
 /** One step of a finished hand. */

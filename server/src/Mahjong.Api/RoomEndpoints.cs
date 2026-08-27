@@ -228,29 +228,8 @@ public static class RoomEndpoints
         if (room.Status != RoomStatus.Lobby)
             return Results.Conflict(new ErrorResponse("AlreadyPlaying"));
 
-        var taken = room.Players.Select(p => p.Seat).ToHashSet();
-        var free = Enumerable.Range(0, SeatCount).Where(s => !taken.Contains(s)).ToList();
-        var wanted = Math.Min(request.Count ?? free.Count, free.Count);
-
-        if (wanted == 0) return Results.Conflict(new ErrorResponse("NoFreeSeats"));
-
-        var botNumber = room.Players.Count(p => p.IsBot);
-
-        foreach (var seat in free.Take(wanted))
-        {
-            botNumber++;
-            db.Players.Add(new Player
-            {
-                RoomId = room.Id,
-                DisplayName = $"Bot {botNumber}",
-                Seat = seat,
-                IsBot = true,
-                IsConnected = true,
-                // Bots never authenticate, but the column is not nullable and a shared empty value
-                // would collide on the token index, so they get a throwaway token like anyone else.
-                TokenHash = PlayerToken.HashOf(PlayerToken.Issue()),
-            });
-        }
+        var seated = Roster.SeatBots(db, room, request.Count);
+        if (seated.Count == 0) return Results.Conflict(new ErrorResponse("NoFreeSeats"));
 
         await db.SaveChangesAsync(cancel);
 

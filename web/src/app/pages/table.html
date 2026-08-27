@@ -1,4 +1,14 @@
-@if (view(); as view) {
+<!-- The seat is gone from under this browser: left, or freed by the host. Said plainly and stayed
+     put, rather than bouncing the player somewhere - being dropped onto the home screen with no
+     explanation is how somebody concludes the app crashed. -->
+@if (removedReason(); as reason) {
+  <main class="loading" data-testid="removed">
+    <h2>You are no longer at this table</h2>
+    <p class="muted">{{ reason }}</p>
+    <a class="btn" [routerLink]="['/join', code()]" data-testid="removed-rejoin">Sit down again</a>
+    <a class="btn secondary" [routerLink]="['/']">Home</a>
+  </main>
+} @else if (view(); as view) {
   <div
     class="table"
     [class.my-turn]="isMyTurn()"
@@ -8,7 +18,7 @@
     <!-- ---------------------------------------------------------------- status bar -->
     <header class="status">
       <div class="left">
-        <span class="hand">Hand {{ view.handNumber }}</span>
+        <span class="hand" data-testid="hand-number">Hand {{ view.handNumber }}</span>
         <span class="wall" data-testid="tiles-remaining">{{ view.tilesRemaining }} left</span>
       </div>
 
@@ -68,40 +78,55 @@
             </button>
 
             <!-- Sits above the card-wide button in z-order, so a tap on the eye is answered by the
-                 eye rather than by the sheet-opening button underneath it. -->
-            <button
-              class="eye"
-              type="button"
-              [class.on]="backsOpen(opponent.seat)"
-              (click)="toggleBacks(opponent.seat)"
-              [attr.aria-pressed]="backsOpen(opponent.seat)"
-              [attr.aria-label]="
-                (backsOpen(opponent.seat) ? 'Hide' : 'Show') +
-                ' the ' +
-                opponent.concealedCount +
-                ' tiles ' +
-                opponent.displayName +
-                ' is holding'
-              "
-              [attr.data-testid]="'opponent-' + opponent.seat + '-eye'"
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M1.8 12S5.9 5.4 12 5.4 22.2 12 22.2 12 18.1 18.6 12 18.6 1.8 12 1.8 12Z" />
-                <circle cx="12" cy="12" r="3.2" />
-                @if (!backsOpen(opponent.seat)) {
-                  <line x1="3.6" y1="20.4" x2="20.4" y2="3.6" />
-                }
-              </svg>
-            </button>
+                 eye rather than by the sheet-opening button underneath it.
+
+                 Gone once this seat has shown its hand: the eye is a choice between a count and a
+                 row of backs, and neither of those is on the card any more. -->
+            @if (!opponent.concealed) {
+              <button
+                class="eye"
+                type="button"
+                [class.on]="backsOpen(opponent.seat)"
+                (click)="toggleBacks(opponent.seat)"
+                [attr.aria-pressed]="backsOpen(opponent.seat)"
+                [attr.aria-label]="
+                  (backsOpen(opponent.seat) ? 'Hide' : 'Show') +
+                  ' the ' +
+                  opponent.concealedCount +
+                  ' tiles ' +
+                  opponent.displayName +
+                  ' is holding'
+                "
+                [attr.data-testid]="'opponent-' + opponent.seat + '-eye'"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="M1.8 12S5.9 5.4 12 5.4 22.2 12 22.2 12 18.1 18.6 12 18.6 1.8 12 1.8 12Z"
+                  />
+                  <circle cx="12" cy="12" r="3.2" />
+                  @if (!backsOpen(opponent.seat)) {
+                    <line x1="3.6" y1="20.4" x2="20.4" y2="3.6" />
+                  }
+                </svg>
+              </button>
+            }
 
             <div class="who">
               <span class="wind">{{ windOf(opponent.seat) }}</span>
-              <span class="name">{{ opponent.displayName }}</span>
-              @if (opponent.isBot) {
-                <em class="tag">bot</em>
-              }
-              @if (!opponent.isConnected && !opponent.isBot) {
-                <em class="tag away">away</em>
+
+              <!-- A chair with nobody in it, which happens between hands: somebody said no to
+                   another game and left. Said in words, because the alternative is a card with a
+                   blank where a name goes and an "away" tag for a player who is not away. -->
+              @if (opponent.displayName) {
+                <span class="name">{{ opponent.displayName }}</span>
+                @if (opponent.isBot) {
+                  <em class="tag">bot</em>
+                }
+                @if (!opponent.isConnected && !opponent.isBot) {
+                  <em class="tag away">away</em>
+                }
+              } @else {
+                <span class="name muted">empty seat</span>
               }
               <span class="balance" [class.down]="opponent.balance < 0">
                 {{ opponent.balance > 0 ? '+' : '' }}{{ opponent.balance }}
@@ -109,21 +134,35 @@
             </div>
 
             <div class="their-tiles">
-              <!-- Face down by default: sixteen blank tiles say nothing a number does not, and on a
-                   phone they say it across four rows that the action bar at the bottom pays for. -->
-              <div
-                class="hidden-hand"
-                [class.counted]="!backsOpen(opponent.seat)"
-                [attr.data-testid]="'opponent-' + opponent.seat + '-count'"
-              >
-                @if (backsOpen(opponent.seat)) {
-                  @for (n of repeat(opponent.concealedCount); track n) {
-                    <mj-tile code="back" />
+              <!-- Shown, once the hand is over and its owner said so. Nothing to toggle here: the
+                   eye is about how much room a face-down hand takes up, and these are faces. -->
+              @if (opponent.concealed; as shown) {
+                <div
+                  class="hidden-hand shown"
+                  [attr.data-testid]="'opponent-' + opponent.seat + '-hand'"
+                >
+                  @for (tile of shown; track tile.id) {
+                    <mj-tile [code]="tile.code" [joker]="isJoker(tile.code)" />
                   }
-                } @else {
-                  <span class="count">{{ opponent.concealedCount }} in hand</span>
-                }
-              </div>
+                </div>
+              } @else {
+                <!-- Face down by default: sixteen blank tiles say nothing a number does not, and on
+                     a phone they say it across four rows that the action bar at the bottom pays
+                     for. -->
+                <div
+                  class="hidden-hand"
+                  [class.counted]="!backsOpen(opponent.seat)"
+                  [attr.data-testid]="'opponent-' + opponent.seat + '-count'"
+                >
+                  @if (backsOpen(opponent.seat)) {
+                    @for (n of repeat(opponent.concealedCount); track n) {
+                      <mj-tile code="back" />
+                    }
+                  } @else {
+                    <span class="count">{{ opponent.concealedCount }} in hand</span>
+                  }
+                </div>
+              }
 
               @if (opponent.melds.length) {
                 <div class="melds">
@@ -196,6 +235,156 @@
         </div>
       }
     </section>
+
+    <!-- ---------------------------------------------------------------- the next game
+         Docked between the pool and your own hand rather than thrown up as a sheet: the whole
+         reason a finished table stays on screen is that people are looking at it, and a modal over
+         the top of that would be the result dialog again under a different name. -->
+    @if (newGame(); as offer) {
+      <section class="next-game panel" data-testid="new-game">
+        <header>
+          <h2>
+            @if (offer.proposedBySeat === view.yourSeat) {
+              You have called another game
+            } @else {
+              {{ view.seats[offer.proposedBySeat].displayName }} has called another game
+            }
+          </h2>
+          <p class="muted">Everybody has to say yes. The table deals as soon as they have.</p>
+        </header>
+
+        <!-- One row per seat, empty chairs included. An empty chair is exactly as much of a reason
+             the table has not dealt as somebody who has not answered yet. -->
+        <ul class="answers" data-testid="new-game-answers">
+          @for (row of agreement(); track row.seat) {
+            <li [attr.data-testid]="'answer-' + row.seat" [class.empty]="row.empty">
+              <span class="wind">{{ row.wind }}</span>
+
+              <span class="who">
+                @if (row.empty) {
+                  <em class="muted">empty seat</em>
+                } @else {
+                  {{ row.name }}
+                  @if (row.isYou) {
+                    <em class="tag">you</em>
+                  }
+                  @if (row.isBot) {
+                    <em class="tag">bot</em>
+                  }
+                }
+              </span>
+
+              @if (row.empty) {
+                <span class="state waiting" [attr.data-testid]="'answer-' + row.seat + '-state'">
+                  nobody sitting
+                </span>
+              } @else if (row.accepted) {
+                <span class="state in" [attr.data-testid]="'answer-' + row.seat + '-state'">
+                  in
+                </span>
+              } @else {
+                <span class="state waiting" [attr.data-testid]="'answer-' + row.seat + '-state'">
+                  still deciding
+                </span>
+              }
+
+              <!-- The host's way past somebody who has stopped answering. Only for a seat that has
+                   not said yes, and never for the host's own: a table cannot free the chair that
+                   is the only one able to free chairs. -->
+              @if (isHost() && !row.empty && !row.accepted && row.seat !== view.hostSeat) {
+                <button
+                  class="btn secondary tiny"
+                  type="button"
+                  (click)="removeSeat(row.seat)"
+                  [attr.data-testid]="'remove-' + row.seat"
+                >
+                  Remove
+                </button>
+              }
+            </li>
+          }
+        </ul>
+
+        <!-- Your own answer. Saying no is leaving: there is no third state where you sit at a table
+             you have declined to play at. -->
+        <div class="answer-buttons">
+          @if (iAgreed()) {
+            <p class="muted" data-testid="new-game-mine">
+              You are in. Waiting for the rest of the table.
+            </p>
+          } @else {
+            <button class="btn" type="button" (click)="acceptNewGame()" data-testid="join-new-game">
+              Join the game
+            </button>
+
+            <button
+              class="btn secondary"
+              type="button"
+              (click)="declineNewGame()"
+              data-testid="decline-new-game"
+            >
+              No thanks - leave the table
+            </button>
+          }
+        </div>
+
+        <!-- Host only, and only while a chair is actually empty: somebody to fill it with, or a
+             link to hand to somebody who will. -->
+        @if (isHost()) {
+          <div class="host-tools">
+            @if (emptySeats()) {
+              <button
+                class="btn secondary"
+                type="button"
+                (click)="fillWithBots()"
+                data-testid="fill-with-bots"
+              >
+                Fill {{ emptySeats() === 1 ? 'the empty seat' : 'the empty seats' }} with bots
+              </button>
+
+              <div class="invite">
+                <code class="link" data-testid="table-invite-url">{{ inviteUrl() }}</code>
+                <button
+                  class="btn secondary tiny"
+                  type="button"
+                  (click)="copyInvite()"
+                  data-testid="copy-table-invite"
+                >
+                  {{ copied() ? 'Copied' : 'Copy' }}
+                </button>
+              </div>
+            }
+
+            <button
+              class="btn secondary"
+              type="button"
+              (click)="cancelNewGame()"
+              data-testid="cancel-new-game"
+            >
+              Take the offer back
+            </button>
+          </div>
+        }
+      </section>
+    } @else if (handOver() && isHost()) {
+      <!-- The same dock, before anybody has been asked anything. The result sheet offers this too,
+           but the sheet closes, and the host should not have to reopen a scoreboard to ask the
+           table whether it wants another game. -->
+      <section class="next-game panel" data-testid="new-game-call">
+        <p class="muted">
+          The hand is finished. Everybody has to say yes before the table deals again.
+        </p>
+
+        <button
+          class="btn"
+          type="button"
+          (click)="proposeNewGame()"
+          data-testid="propose-new-game-bar"
+        >
+          Call another game
+        </button>
+      </section>
+    }
 
     <!-- ---------------------------------------------------------------- your area -->
     <section class="mine">
@@ -363,7 +552,31 @@
       <div class="bar">
         <div class="bar-body">
           @if (view.phase === 'HandOver') {
-            <span class="prompt">Hand finished</span>
+            <div class="over">
+              <!-- The result sheet closes, so the bar has to be able to bring it back. Left as a
+                   plain line while it is still up: pressing a button that opens what is already
+                   open in front of you is not a thing to offer. -->
+              @if (outcomeOpen()) {
+                <span class="prompt">Hand finished</span>
+              } @else {
+                <button
+                  class="btn secondary"
+                  type="button"
+                  (click)="reopenOutcome()"
+                  data-testid="show-outcome"
+                >
+                  Hand finished - see the result
+                </button>
+              }
+
+              @if (iRevealed()) {
+                <span class="prompt" data-testid="revealed">Your tiles are showing</span>
+              } @else {
+                <button class="btn" type="button" (click)="reveal()" data-testid="reveal">
+                  Reveal My Tiles
+                </button>
+              }
+            </div>
           } @else if (view.claim; as pending) {
             @if (!pending.youAnswered) {
               <div
@@ -390,6 +603,10 @@
                   <span class="call-line" data-testid="claim-call-line">{{ line }}</span>
                 }
 
+                <!-- Take and Pass both live here, and only here. The sheet above is where the
+                     call is chosen and the tiles it costs are counted out; answering the window -
+                     taking the tile, or letting it go - is a bar action like every other one, so
+                     the thumb never has to leave the bar to finish what it started. -->
                 <div class="claim-buttons">
                   @if (!claimDialogOpen()) {
                     <button
@@ -403,8 +620,28 @@
                           candidates().length ? 'Options (' + candidates().length + ')' : 'Options'
                         }}
                       } @else {
-                        Take
+                        Options
                       }
+                    </button>
+                  } @else if (assisted()) {
+                    <button
+                      class="btn take"
+                      type="button"
+                      (click)="takePick()"
+                      [disabled]="!pickMatch()"
+                      data-testid="claim-take"
+                    >
+                      {{ pickMatch() ? 'Take - ' + pickMatch()!.describe : 'Take' }}
+                    </button>
+                  } @else {
+                    <button
+                      class="btn take"
+                      type="button"
+                      (click)="confirmPress()"
+                      [disabled]="!pickReady()"
+                      data-testid="claim-take"
+                    >
+                      Take
                     </button>
                   }
 
@@ -412,7 +649,7 @@
                     class="btn secondary"
                     type="button"
                     (click)="pass()"
-                    [attr.data-testid]="claimDialogOpen() ? 'claim-pass-quick' : 'claim-pass'"
+                    data-testid="claim-pass"
                   >
                     Pass
                   </button>
@@ -670,33 +907,11 @@
             <p class="muted none">Nothing in your hand takes this tile.</p>
           }
 
-          <div class="claim-foot">
-            @if (assisted()) {
-              <button
-                class="btn"
-                type="button"
-                (click)="takePick()"
-                [disabled]="!pickMatch()"
-                data-testid="claim-take"
-              >
-                {{ pickMatch() ? 'Take - ' + pickMatch()!.describe : 'Take' }}
-              </button>
-            } @else {
-              <button
-                class="btn"
-                type="button"
-                (click)="confirmPress()"
-                [disabled]="!pickReady()"
-                data-testid="claim-take"
-              >
-                Take
-              </button>
-            }
-
-            <!-- Only once something has been called. Nothing is counting it down, so the way out
-                 of a call has to be a button: it holds the tile against the other three until it
-                 is let go. -->
-            @if (pressedKind()) {
+          <!-- Only once something has been called. Nothing is counting it down, so the way out of
+               a call has to be a button: it holds the tile against the other three until it is let
+               go. Take and Pass are not here - they are bar actions, on the bar. -->
+          @if (pressedKind()) {
+            <div class="claim-foot">
               <button
                 class="btn secondary"
                 type="button"
@@ -705,21 +920,8 @@
               >
                 Cancel call
               </button>
-            }
-
-            <!-- Solid rather than outlined when a bot threw it, because then this is the button
-                 the hand is actually waiting on: nothing is timing that window, and the three
-                 people at the table each end their own part of it by pressing it. -->
-            <button
-              class="btn"
-              [class.secondary]="!claimFrom()?.isBot"
-              type="button"
-              (click)="pass()"
-              data-testid="claim-pass"
-            >
-              Pass
-            </button>
-          </div>
+            </div>
+          }
 
           @if (refusal(); as refused) {
             <div class="claim-invalid" data-testid="claim-refused" role="alert">
@@ -752,13 +954,14 @@
                 that beats it.
               } @else if (claimFrom()?.isBot) {
                 Nothing is counting down - a bot threw this, so the table waits for all three of you
-                to press Pass.
+                to press Pass on the bar.
               } @else if (assisted()) {
-                Or tap tiles in your hand and press Take. Green outline with a letter = one way to
-                use that tile, dashed gold = more than one, red = this tile wins the hand.
+                Or tap tiles in your hand and press Take on the bar. Green outline with a letter =
+                one way to use that tile, dashed gold = more than one, red = this tile wins the
+                hand.
               } @else {
                 Nothing is marked for you at this table. Press the call, then tap the tiles it costs
-                and press Take.
+                and press Take on the bar.
               }
             </p>
           }
@@ -858,11 +1061,32 @@
           </h2>
 
           <p class="seat-line">
-            <span data-testid="seat-sheet-count">{{ seat.concealedCount }} tiles in hand</span>
+            <span data-testid="seat-sheet-count">
+              @if (seat.revealed) {
+                showing all {{ seat.concealedCount }} tiles
+              } @else {
+                {{ seat.concealedCount }} tiles in hand
+              }
+            </span>
             <span class="balance" [class.down]="seat.balance < 0">
               {{ seat.balance > 0 ? '+' : '' }}{{ seat.balance }}
             </span>
           </p>
+
+          <!-- The whole reason for opening somebody else's seat after a hand: what they were
+               actually holding. Only here when they chose to show it. A hand nobody revealed stays
+               what it was during play - the sets that went down, the flowers, and a count for the
+               rest, because blowing up a face-down tile shows nothing the count did not. -->
+          @if (seat.concealed; as shown) {
+            <h3>In hand</h3>
+            <div class="big-melds" data-testid="seat-sheet-hand">
+              <div class="meld">
+                @for (tile of shown; track tile.id) {
+                  <mj-tile [code]="tile.code" [joker]="isJoker(tile.code)" />
+                }
+              </div>
+            </div>
+          }
 
           @if (seat.melds.length) {
             <h3>Sets down</h3>
@@ -886,7 +1110,7 @@
             </div>
           }
 
-          @if (!seat.melds.length && !seat.bonus.length) {
+          @if (!seat.melds.length && !seat.bonus.length && !seat.concealed) {
             <p class="muted none">Nothing on the table yet - every tile is still in hand.</p>
           }
 
@@ -924,46 +1148,90 @@
     }
 
     @if (view.outcome; as outcome) {
-      <div class="sheet" data-testid="outcome">
-        <div class="sheet-body panel">
-          <h2 data-testid="outcome-title">{{ outcomeTitle(view) }}</h2>
+      @if (outcomeOpen()) {
+        <div class="sheet" (click)="closeOutcome()" data-testid="outcome">
+          <div class="sheet-body panel" (click)="$event.stopPropagation()">
+            <h2 data-testid="outcome-title">{{ outcomeTitle(view) }}</h2>
 
-          @if (outcome.winnerSeat !== null) {
-            <p class="total" data-testid="outcome-total">{{ outcome.totalUnits }} units</p>
+            @if (outcome.winnerSeat !== null) {
+              <p class="total" data-testid="outcome-total">{{ outcome.totalUnits }} units</p>
 
-            <ul class="breakdown" data-testid="outcome-breakdown">
-              @for (line of outcome.breakdown; track $index) {
-                <li>
-                  <span>{{ bonusLabel(line.name) }}</span>
-                  <strong>{{ line.units }}</strong>
-                </li>
-              }
-            </ul>
-          }
+              <ul class="breakdown" data-testid="outcome-breakdown">
+                @for (line of outcome.breakdown; track $index) {
+                  <li>
+                    <span>{{ bonusLabel(line.name) }}</span>
+                    <strong>{{ line.units }}</strong>
+                  </li>
+                }
+              </ul>
+            }
 
-          @if (outcome.settlements.length) {
-            <ul class="scores" data-testid="outcome-settlements">
-              @for (settlement of outcome.settlements; track $index) {
-                <li>
-                  <span>{{ view.seats[settlement.seat].displayName }}</span>
-                  <strong [class.down]="settlement.delta < 0">
-                    {{ settlement.delta > 0 ? '+' : '' }}{{ settlement.delta }}
-                  </strong>
-                </li>
-              }
-            </ul>
-          }
+            @if (outcome.settlements.length) {
+              <ul class="scores" data-testid="outcome-settlements">
+                @for (settlement of outcome.settlements; track $index) {
+                  <li>
+                    <span>{{ view.seats[settlement.seat].displayName }}</span>
+                    <strong [class.down]="settlement.delta < 0">
+                      {{ settlement.delta > 0 ? '+' : '' }}{{ settlement.delta }}
+                    </strong>
+                  </li>
+                }
+              </ul>
+            }
 
-          <button
-            class="btn wide"
-            type="button"
-            (click)="backToLobby()"
-            data-testid="back-to-lobby"
-          >
-            Back to the table
-          </button>
+            <!-- The seat that made the table calls the next game from here, which is where it is
+                 standing when the hand ends. Calling it puts the sheet away, because what happens
+                 next - three people answering - happens on the table behind it. -->
+            @if (isHost() && !newGame()) {
+              <button
+                class="btn wide"
+                type="button"
+                (click)="proposeNewGame()"
+                data-testid="propose-new-game"
+              >
+                Call another game
+              </button>
+            }
+
+            <!-- Offered here as well as in the bar behind it. This is where everybody is when a
+                 hand ends, and showing your hand is what people do at that moment. -->
+            @if (iRevealed()) {
+              <p class="muted" data-testid="outcome-revealed">
+                Your tiles are showing on the table.
+              </p>
+            } @else {
+              <button
+                class="btn wide secondary"
+                type="button"
+                (click)="reveal()"
+                data-testid="outcome-reveal"
+              >
+                Reveal My Tiles
+              </button>
+            }
+
+            <!-- Closing puts the finished table back on screen. Leaving is the second choice now,
+                 not the only one, which is why it is the quieter of the two. -->
+            <button
+              class="btn wide secondary"
+              type="button"
+              (click)="closeOutcome()"
+              data-testid="outcome-close"
+            >
+              Close and look at the table
+            </button>
+
+            <button
+              class="btn wide secondary"
+              type="button"
+              (click)="backToLobby()"
+              data-testid="back-to-lobby"
+            >
+              Back to the lobby
+            </button>
+          </div>
         </div>
-      </div>
+      }
     }
   </div>
 } @else {

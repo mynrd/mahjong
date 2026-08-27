@@ -10,8 +10,9 @@ import { Player, closeAll, createRoomWithRules, deal, handSize, joinRoom } from 
  * things that must hold on *every* discard live - the window opening on all three seats whatever
  * they are holding, and the fact that nothing at all happens until they answer.
  *
- * A long claim window, because a person's discard is on a clock and six seconds is not enough to
- * drive four browsers through one.
+ * The long window is the beat that runs after somebody calls, not a clock on answering: nobody is
+ * timed for answering a discard at all (RULES.md 3.2). Two minutes of it, because driving four
+ * browsers through one call takes longer than the six seconds a table would normally allow.
  */
 const TABLE = { claimWindowSeconds: 120, jokerEnabled: false };
 
@@ -96,12 +97,14 @@ test.describe('the table controls', () => {
 
       await throwLastTile(host);
 
-      // Not while the window is open, not even for the seat about to play. A person threw this one
-      // at a table with the helper on, so it is on the house clock and will end by itself; drawing
-      // through is only offered where nothing else would ever close the window.
+      // A window nobody has called on has no deadline on it at all - RULES.md 3.2 - so the only
+      // thing that would ever end this one is the seat due to play taking its turn. That seat is
+      // offered the wall for exactly that reason, and nobody else is: a seat that is not next
+      // cannot pick up, and the thrower has already had its turn.
       await expect(next.page.getByTestId('claim-bar')).toBeVisible({ timeout: 20_000 });
-      await expect(next.page.getByTestId('draw')).toBeDisabled();
+      await expect(next.page.getByTestId('draw')).toBeEnabled();
       await expect(guests[1].page.getByTestId('draw')).toBeDisabled();
+      await expect(host.page.getByTestId('draw')).toBeDisabled();
 
       for (const guest of guests) await guest.page.getByTestId('claim-pass').click();
 

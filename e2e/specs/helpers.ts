@@ -246,3 +246,49 @@ export async function waitForMyTurn(player: Player, timeout = 60_000): Promise<v
 
   await expect(turnBar).toBeVisible({ timeout: 1_000 });
 }
+
+/**
+ * Plays a hand out with every given page, until one of them is showing the result.
+ *
+ * Every human page has to be driven, not just the one being tested: a window on a discard waits for
+ * every person at the table (RULES.md 3.2), so one idle browser holds the hand open forever. Wins
+ * are taken wherever they are offered, because the fastest way to the end of a hand is to end it.
+ *
+ * Every step is allowed to come to nothing. This runs against a table that keeps playing between
+ * one line and the next, so a button can go away between being found and being pressed.
+ */
+export async function playUntilOutcome(players: Player[], budgetMs = 210_000): Promise<void> {
+  const outcome = players[0].page.getByTestId('outcome');
+  const deadline = Date.now() + budgetMs;
+
+  while (Date.now() < deadline && !(await outcome.isVisible().catch(() => false))) {
+    for (const player of players) {
+      const page = player.page;
+
+      if (await page.getByTestId('outcome').isVisible().catch(() => false)) break;
+
+      const claimTodas = page.getByTestId('claim-Todas');
+      if (await claimTodas.isVisible().catch(() => false)) {
+        await claimTodas.click({ timeout: 5_000 }).catch(() => undefined);
+        continue;
+      }
+
+      if (await passAnyClaim(player)) continue;
+
+      if (await drawIfOffered(player)) continue;
+
+      if (!(await page.getByTestId('turn-bar').isVisible().catch(() => false))) continue;
+
+      const todas = page.getByTestId('declare-todas');
+      if (await todas.isVisible().catch(() => false)) {
+        await todas.click({ timeout: 5_000 }).catch(() => undefined);
+        continue;
+      }
+
+      await throwAnyTile(player);
+    }
+  }
+
+  for (const player of players)
+    await expect(player.page.getByTestId('outcome')).toBeVisible({ timeout: 30_000 });
+}

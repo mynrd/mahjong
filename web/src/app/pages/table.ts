@@ -93,6 +93,17 @@ export interface ClaimRefusal {
   need: string[][];
 }
 
+/** One seat's line in the offer of another game. */
+interface AgreementRow {
+  seat: number;
+  name: string | null;
+  wind: string;
+  isBot: boolean;
+  isYou: boolean;
+  empty: boolean;
+  accepted: boolean;
+}
+
 /** A declaration you can make on your own turn, other than todas. */
 export interface TurnMove {
   kind: 'SecretKang' | 'Sagasa';
@@ -140,6 +151,13 @@ export class TablePage implements OnDestroy {
   protected readonly lastError = this.game.lastError;
   protected readonly messages = this.game.messages;
 
+  /**
+   * Why this browser no longer holds a seat, once it no longer holds one. Set by the server rather
+   * than guessed at from a failure: leaving and being removed both take the seat away, and the
+   * player is owed which of the two happened to them.
+   */
+  protected readonly removedReason = this.game.removed;
+
   /** The tile lifted out of the hand. A second tap on the same tile offers it up to be thrown. */
   protected readonly selected = signal<number | null>(null);
 
@@ -167,6 +185,77 @@ export class TablePage implements OnDestroy {
   private readonly clock = setInterval(() => this.now.set(Date.now()), 250);
 
   protected readonly showScores = signal(false);
+
+  /**
+   * Whether the result sheet has been put away for this hand.
+   *
+   * A finished hand is worth looking at: whose sets were down, what was left in the pool, which
+   * tile the winner was waiting on. The sheet covers all of it, so it closes - and reopens from the
+   * action bar, because a result nobody can get back to is a result nobody dares close. Reset on
+   * every deal, so the next hand's sheet still comes up by itself.
+   */
+  private readonly outcomeDismissed = signal(false);
+
+  protected readonly outcomeOpen = computed(
+    () => !!this.view()?.outcome && !this.outcomeDismissed(),
+  );
+
+  /** The hand is finished. What the table is for now is looking at, not playing. */
+  protected readonly handOver = computed(() => this.view()?.phase === 'HandOver');
+
+  /** Your own hand is face up on the table. One way, and only for the hand just finished. */
+  protected readonly iRevealed = computed(() => !!this.me()?.revealed);
+
+  // ---------------------------------------------------------------- the next game
+
+  /** The standing offer of another game, or null when nobody has called one. */
+  protected readonly newGame = computed(() => this.view()?.newGame ?? null);
+
+  /**
+   * Whether this browser holds the seat that made the table. Read off the view rather than off the
+   * stored session, so what the screen offers and what the server will accept cannot disagree.
+   */
+  protected readonly isHost = computed(() => {
+    const view = this.view();
+    return !!view && view.hostSeat !== null && view.hostSeat === view.yourSeat;
+  });
+
+  protected readonly iAgreed = computed(() => {
+    const view = this.view();
+    return !!view && !!view.newGame?.accepted.includes(view.yourSeat);
+  });
+
+  /**
+   * Every seat as the offer sees it: who is sitting there, whether they have said yes, and whether
+   * the chair is empty. One row per seat rather than a list of names, because an empty chair is
+   * exactly as much of a reason the table has not dealt as somebody who has not answered.
+   */
+  protected readonly agreement = computed<AgreementRow[]>(() => {
+    const view = this.view();
+    const offer = view?.newGame;
+    if (!view || !offer) return [];
+
+    return view.seats.map((seat) => ({
+      seat: seat.seat,
+      name: seat.displayName,
+      wind: this.windOf(seat.seat),
+      isBot: seat.isBot,
+      isYou: seat.seat === view.yourSeat,
+      // Falsy rather than a null check. A seat nobody is sitting in has no name at all, and the
+      // difference between null and absent is not one the table should have an opinion about.
+      empty: !seat.displayName,
+      accepted: offer.accepted.includes(seat.seat),
+    }));
+  });
+
+  protected readonly emptySeats = computed(
+    () => this.agreement().filter((row) => row.empty).length,
+  );
+
+  /** The link to hand to somebody to fill a seat that has been left empty. */
+  protected readonly inviteUrl = computed(() => `${window.location.origin}/join/${this.code()}`);
+
+  protected readonly copied = signal(false);
 
   /**
    * The seat whose sheet is open, or null. An opponent card is about 110px wide on a phone, which
@@ -260,12 +349,25 @@ export class TablePage implements OnDestroy {
   private lastDiscardId: number | null = null;
   private myTileIds: ReadonlySet<number> = new Set();
   private lastHand = -1;
+  private offerStanding = false;
   private landingTimer: ReturnType<typeof setTimeout> | undefined;
   private arrivalTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor() {
     queueMicrotask(() => this.begin());
     effect(() => this.noticeChanges(this.view()));
+
+    // The seat is gone: hang up, and forget the token, which the server has already stopped
+    // honouring. The page stays put and says so rather than bouncing somewhere - being dropped onto
+    // the home screen with no explanation is how a player concludes the app crashed.
+    effect(() => {
+      if (!this.removedReason()) return;
+
+      untracked(() => {
+        void this.game.disconnect();
+        this.session.clear();
+      });
+    });
   }
 
   ngOnDestroy(): void {
@@ -286,6 +388,13 @@ export class TablePage implements OnDestroy {
    */
   private noticeChanges(view: PlayerGameView | null): void {
     if (!view) return;
+
+    // An offer of another game is a question put to this player, and it is asked on the table
+    // behind the result sheet. So the sheet gets out of the way when one arrives - once, on the
+    // change, so somebody who reopens the result to read it again is not fighting the screen.
+    const offered = !!view.newGame;
+    if (offered && !this.offerStanding) this.outcomeDismissed.set(true);
+    this.offerStanding = offered;
 
     const last = view.discards[view.discards.length - 1];
     const discardId = last?.tile.id ?? null;
@@ -309,6 +418,9 @@ export class TablePage implements OnDestroy {
         this.confirming.set(null);
         this.selected.set(null);
       }
+
+      // A new deal is a new result to wait for, so last hand's dismissal does not carry over.
+      this.outcomeDismissed.set(false);
 
       return;
     }
@@ -1204,6 +1316,64 @@ export class TablePage implements OnDestroy {
 
   protected todas(): void {
     void this.game.declareTodas();
+  }
+
+  /**
+   * Turns your hand face up for the other three. Offered only once the hand is over, and only
+   * once: the server refuses a second press, and there is nothing to undo it with.
+   */
+  protected reveal(): void {
+    if (!this.handOver() || this.iRevealed()) return;
+    void this.game.reveal();
+  }
+
+  protected proposeNewGame(): void {
+    void this.game.proposeNewGame();
+  }
+
+  protected cancelNewGame(): void {
+    void this.game.cancelNewGame();
+  }
+
+  protected acceptNewGame(): void {
+    void this.game.acceptNewGame();
+  }
+
+  /**
+   * Says no, which frees this seat and takes this browser off the table. The server answers before
+   * the token stops working, and the push it sends is what actually moves the page - so nothing
+   * here navigates, and a refusal leaves the player exactly where they were.
+   */
+  protected declineNewGame(): void {
+    void this.game.declineNewGame();
+  }
+
+  protected removeSeat(seat: number): void {
+    void this.game.removeSeat(seat);
+  }
+
+  protected fillWithBots(): void {
+    void this.game.fillWithBots();
+  }
+
+  protected async copyInvite(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(this.inviteUrl());
+    } catch {
+      // Clipboard access needs a secure context, which plain http on a LAN is not. The link is on
+      // screen to be copied by hand, so this is a nicety failing, not the feature failing.
+    }
+
+    this.copied.set(true);
+    setTimeout(() => this.copied.set(false), 1800);
+  }
+
+  protected closeOutcome(): void {
+    this.outcomeDismissed.set(true);
+  }
+
+  protected reopenOutcome(): void {
+    this.outcomeDismissed.set(false);
   }
 
   protected async backToLobby(): Promise<void> {

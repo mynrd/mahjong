@@ -187,7 +187,11 @@ test.describe('playing a hand', () => {
   });
 
   test('a hand played out against bots reaches a scored ending', async ({ browser }) => {
-    test.setTimeout(180_000);
+    // Wide enough for the budget below to actually be spendable. A hand against three bots usually
+    // takes about ninety seconds, and a slow one has been seen with four tiles left in the wall at
+    // 150 - so the loop is given 210 and the test 300, where the old pairing of a 150s loop inside
+    // a 180s test could time out while the table was still playing perfectly happily.
+    test.setTimeout(300_000);
 
     const { host, code } = await createRoom(browser);
     await fillWithBots(host);
@@ -203,7 +207,7 @@ test.describe('playing a hand', () => {
     // the budget on waiting and stop the hand halfway through - which is exactly what it did.
     const somethingToDo = turnBar.or(claimBar).or(drawBar).or(outcome);
 
-    const deadline = Date.now() + 150_000;
+    const deadline = Date.now() + 210_000;
 
     while (Date.now() < deadline) {
       await somethingToDo.first().waitFor({ state: 'visible', timeout: 40_000 });
@@ -239,10 +243,22 @@ test.describe('playing a hand', () => {
       await throwAnyTile(host);
     }
 
-    await expect(outcome).toBeVisible({ timeout: 120_000 });
+    // Short, because the loop above is what makes the hand move: if it ran out of budget without
+    // an ending, waiting another two minutes on a table nobody is driving proves nothing.
+    await expect(outcome).toBeVisible({ timeout: 30_000 });
     await expect(host.page.getByTestId('outcome-title')).not.toBeEmpty();
 
     await host.page.screenshot({ path: 'screenshots/hand-outcome.png', fullPage: true });
+
+    // The result is a sheet over the table, not a door out of it. Closing it leaves the finished
+    // table on screen to be looked at, and the action bar is what brings the result back.
+    await host.page.getByTestId('outcome-close').click();
+    await expect(outcome).toBeHidden();
+    await expect(host.page.getByTestId('table')).toBeVisible();
+    await host.page.screenshot({ path: 'screenshots/hand-over-table.png', fullPage: true });
+
+    await host.page.getByTestId('show-outcome').click();
+    await expect(outcome).toBeVisible();
 
     await host.page.getByTestId('back-to-lobby').click();
     await expect(host.page).toHaveURL(new RegExp(`/room/${code}$`));

@@ -1,4 +1,5 @@
-﻿using Mahjong.Domain;
+﻿using System.Text.Json.Serialization;
+using Mahjong.Domain;
 
 namespace Mahjong.Api;
 
@@ -32,8 +33,21 @@ public sealed record HandGroupView(
 /// The concealed tiles read as blocks, for Auto Arrange. Derived from <see cref="Concealed"/>, so
 /// it is filled in for the viewer's own seat and null for everyone else, for the same reason.
 /// </param>
+/// <param name="Revealed">
+/// This seat has turned its hand face up now that the hand is over, so <see cref="Concealed"/> is
+/// filled in for everybody rather than for its owner alone. Only ever true once the hand is over.
+/// </param>
 public sealed record SeatStateView(
     int Seat,
+    /// <summary>
+    /// Null when nobody is sitting there, which is a thing that happens now: a player who says no
+    /// to another game leaves, and the chair stays empty until it is filled.
+    ///
+    /// Written even when it is null, against the serialiser's default of leaving nulls out. An
+    /// absent property and a null one are the same thing to most readers and not to a strict one,
+    /// and "is this seat empty" is exactly the question a client asks of this field.
+    /// </summary>
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     string? DisplayName,
     bool IsBot,
     bool IsConnected,
@@ -42,7 +56,8 @@ public sealed record SeatStateView(
     IReadOnlyList<HandGroupView>? Groups,
     IReadOnlyList<MeldView> Melds,
     IReadOnlyList<TileView> Bonus,
-    int Balance);
+    int Balance,
+    bool Revealed = false);
 
 public sealed record DiscardView(int Seat, TileView Tile, bool Claimed);
 
@@ -162,6 +177,16 @@ public sealed record TurnOptionsView(
 
 public sealed record ScoreLineView(string Name, int Units);
 
+/// <summary>
+/// The standing offer of another game, as the whole table sees it.
+///
+/// Sent to everybody, not just to the seats still deciding: the point of asking rather than dealing
+/// is that people can see who is holding the table up, and a list only the host could read would be
+/// the same silence with an extra step.
+/// </summary>
+/// <param name="Accepted">Seats that have said yes. A seat nobody is sitting in is never in here.</param>
+public sealed record NewGameView(int ProposedBySeat, IReadOnlyList<int> Accepted);
+
 public sealed record OutcomeView(
     HandEndReason Reason,
     int? WinnerSeat,
@@ -192,6 +217,14 @@ public sealed record PlayerGameView(
     TurnOptionsView? YourTurn,
     OutcomeView? Outcome,
     /// <summary>
+    /// Which seat made the table. Sent so the client can draw the actions only that seat has -
+    /// calling the next game, removing somebody who has stopped answering - from what the server
+    /// says rather than from what the browser remembers about itself.
+    /// </summary>
+    int? HostSeat,
+    /// <summary>The offer of another game, or null when nobody has called one.</summary>
+    NewGameView? NewGame,
+    /// <summary>
     /// Whether this table lets the server help. Off, no claim is ever spelled out and no hand is
     /// ever laid out for you. The client needs it on the view rather than only in the room's rules
     /// because it changes what the table draws, not just what it is allowed to send.
@@ -208,11 +241,18 @@ public static class GameViewBuilder
     /// The seat the view is for. Pass -1 for a view with every hand hidden, which is what a
     /// spectator or an audit dump would get.
     /// </param>
+    /// <param name="revealed">
+    /// Seats that have turned their hand face up, which only happens once the hand is over. Null
+    /// for the ordinary case of nobody having shown anything.
+    /// </param>
     public static PlayerGameView Build(
         GameState state,
         string roomCode,
         int forSeat,
-        IReadOnlyDictionary<int, (string Name, bool IsBot, bool IsConnected, int Balance)> seatInfo)
+        IReadOnlyDictionary<int, (string Name, bool IsBot, bool IsConnected, int Balance)> seatInfo,
+        IReadOnlySet<int>? revealed = null,
+        int? hostSeat = null,
+        NewGameProposal? proposal = null)
     {
         var seats = new List<SeatStateView>(MahjongGame.Seats);
 
@@ -221,6 +261,12 @@ public static class GameViewBuilder
             var hand = state.Hands[seat];
             var info = seatInfo.TryGetValue(seat, out var found) ? found : (Name: (string?)null, IsBot: false, IsConnected: false, Balance: 0);
 
+            // Shown to the rest of the table only once the hand is finished, and only because the
+            // player who holds them asked for it. The phase is checked here as well as where the
+            // request is accepted: this is the line that decides what leaves the server, so it does
+            // not take anybody's word for what the phase was.
+            var shown = state.Phase == GamePhase.HandOver && revealed?.Contains(seat) == true;
+
             seats.Add(new SeatStateView(
                 seat,
                 info.Name,
@@ -228,14 +274,15 @@ public static class GameViewBuilder
                 info.IsConnected,
                 hand.Concealed.Count,
                 // The one line that decides whether this game is cheatable.
-                seat == forSeat ? hand.Concealed.Select(TileView.Of).ToList() : null,
+                seat == forSeat || shown ? hand.Concealed.Select(TileView.Of).ToList() : null,
                 // Same rule: the grouping is read off the concealed tiles, so handing it to
                 // anyone else would hand them the hand. And with assist off nobody gets it at all,
                 // including its owner: reading your own hand is the thing the setting is about.
                 seat == forSeat && state.Rules.AssistEnabled ? BuildGroups(state, hand) : null,
                 hand.Melds.Select(ToView).ToList(),
                 hand.Bonus.Select(TileView.Of).ToList(),
-                info.Balance));
+                info.Balance,
+                shown));
         }
 
         return new PlayerGameView(
@@ -252,6 +299,14 @@ public static class GameViewBuilder
             BuildClaim(state, forSeat),
             BuildTurnOptions(state, forSeat),
             BuildOutcome(state),
+            hostSeat,
+            // Only the seats somebody is actually sitting in. An empty seat cannot have agreed to
+            // anything, and listing it as undecided is what tells the table it needs filling.
+            proposal is null
+                ? null
+                : new NewGameView(
+                    proposal.ProposedBySeat,
+                    proposal.Accepted.Where(seatInfo.ContainsKey).Order().ToList()),
             state.Rules.AssistEnabled);
     }
 
