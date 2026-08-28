@@ -18,7 +18,16 @@ public enum RoomStatus
 public enum GameStatus
 {
     InProgress,
+
+    /// <summary>Played to a result: somebody declared, or the wall ran out.</summary>
     Finished,
+
+    /// <summary>
+    /// Stopped part-way, because the host closed the table under it. Kept apart from
+    /// <see cref="Finished"/> so a hand that never reached a result stays out of the replay list -
+    /// it has no winner, no settlements and no ending to step to.
+    /// </summary>
+    Abandoned,
 }
 
 /// <summary>

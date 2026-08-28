@@ -44,6 +44,15 @@ export class Game {
   /** Why this browser no longer holds a seat, once it no longer holds one. */
   readonly removed = signal<string | null>(null);
 
+  /**
+   * Why the table is over, once the host has ended it.
+   *
+   * Kept apart from `removed` because the two are not the same thing to the player: a seat that was
+   * freed can be sat down in again, and a table that has been closed cannot. The page offers a
+   * different way out of each.
+   */
+  readonly closed = signal<string | null>(null);
+
   private hub: signalR.HubConnection | null = null;
   private messageId = 0;
 
@@ -52,6 +61,7 @@ export class Game {
 
     this.connection.set('connecting');
     this.removed.set(null);
+    this.closed.set(null);
 
     const hub = new signalR.HubConnectionBuilder()
       .withUrl(`${apiBaseUrl()}/hubs/game?access_token=${encodeURIComponent(token)}`)
@@ -67,6 +77,11 @@ export class Game {
     // token stops resolving the moment the row goes, so the page has to be told rather than left to
     // discover it as a string of failures.
     hub.on('Removed', (reason: string) => this.removed.set(reason));
+
+    // The host ended the table, mid-hand or between hands. Every seat is told at once, including
+    // the host's own: one message, so nobody is left looking at a board that has stopped moving
+    // and wondering whether it is their connection.
+    hub.on('TableClosed', (reason: string) => this.closed.set(reason));
 
     hub.on('SeatConnected', (_seat: number, name: string) => this.say(`${name} connected`));
     hub.on('SeatDisconnected', (seat: number) => {
@@ -162,9 +177,14 @@ export class Game {
     return this.invoke('FillWithBots');
   }
 
-  /** Host only: free the seat of somebody who has stopped answering. */
+  /** Host only: free the seat of somebody who has stopped answering, or a bot. */
   removeSeat(seat: number): Promise<boolean> {
     return this.invoke('RemoveSeat', seat);
+  }
+
+  /** Host only: end the table for everybody, mid-hand or between hands. */
+  closeTable(): Promise<boolean> {
+    return this.invoke('CloseTable');
   }
 
   acceptNewGame(): Promise<boolean> {

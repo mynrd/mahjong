@@ -66,6 +66,21 @@ export interface HandBlock {
 }
 
 /**
+ * One call offered on the action bar while a discard is open.
+ *
+ * The dialog draws the tiles a call would take; the bar cannot, so it carries the word and the
+ * count instead. `options` is how many distinct ways the hand could make that call, which is what
+ * decides whether pressing it takes the tile outright or opens the dialog to choose between them.
+ * Zero at an unassisted table, where nothing has been read for this player at all.
+ */
+export interface BarCall {
+  kind: ClaimKind;
+  options: number;
+  live: boolean;
+  testId: string;
+}
+
+/**
  * The gap a dragged tile would drop into: a tile already in the hand, and which side of it. A slot
  * rather than a target tile, because a hand is arranged by putting a tile in a particular place -
  * "third in that run", not just "somewhere in that group".
@@ -122,6 +137,15 @@ const HAND_OPEN_KEY = 'mj.handOpen';
 const LANDING_MS = 380;
 const ARRIVAL_MS = 420;
 
+/**
+ * How many thrown tiles it takes before the pool draws itself small.
+ *
+ * Chosen off the shape of the box rather than the shape of a hand: past about this many, the pile
+ * runs to a fourth row on a wide screen, and the pool's height is whatever the rest of the table
+ * did not want - on a short screen that fourth row is what starts the scrolling.
+ */
+const DENSE_DISCARDS = 40;
+
 /** How far a pointer travels before a press on a tile counts as a drag rather than a tap. */
 const DRAG_THRESHOLD_PX = 8;
 
@@ -158,6 +182,13 @@ export class TablePage implements OnDestroy {
    */
   protected readonly removedReason = this.game.removed;
 
+  /**
+   * Why the table is over, once the host has ended it. Separate from being removed: a freed seat
+   * can be sat down in again and a closed table cannot, so the two screens offer different ways
+   * out of the same dead end.
+   */
+  protected readonly closedReason = this.game.closed;
+
   /** The tile lifted out of the hand. A second tap on the same tile offers it up to be thrown. */
   protected readonly selected = signal<number | null>(null);
 
@@ -185,6 +216,9 @@ export class TablePage implements OnDestroy {
   private readonly clock = setInterval(() => this.now.set(Date.now()), 250);
 
   protected readonly showScores = signal(false);
+
+  /** The host's own sheet: who is at the table, and whether the table goes on. */
+  protected readonly showHost = signal(false);
 
   /**
    * Whether the result sheet has been put away for this hand.
@@ -232,8 +266,12 @@ export class TablePage implements OnDestroy {
    */
   protected readonly agreement = computed<AgreementRow[]>(() => {
     const view = this.view();
-    const offer = view?.newGame;
-    if (!view || !offer) return [];
+    if (!view) return [];
+
+    // Built whether or not anybody has called a game. The rows are the table itself - who is
+    // sitting where - and the host needs them between hands to free a chair, which is a thing to
+    // do before calling the next game rather than only after.
+    const offer = view.newGame;
 
     return view.seats.map((seat) => ({
       seat: seat.seat,
@@ -244,9 +282,21 @@ export class TablePage implements OnDestroy {
       // Falsy rather than a null check. A seat nobody is sitting in has no name at all, and the
       // difference between null and absent is not one the table should have an opinion about.
       empty: !seat.displayName,
-      accepted: offer.accepted.includes(seat.seat),
+      accepted: !!offer?.accepted.includes(seat.seat),
     }));
   });
+
+  /**
+   * Whether the host may free a given chair right now.
+   *
+   * Only between hands: mid-hand that seat is holding tiles the rules are still counting, and the
+   * server refuses it for the same reason. Never the host's own chair, and never one nobody is
+   * sitting in. A bot counts - filling four seats with bots and then wanting one of them back out
+   * is exactly the case this is for.
+   */
+  protected canRemove(row: AgreementRow): boolean {
+    return this.isHost() && this.handOver() && !row.empty && row.seat !== this.view()?.hostSeat;
+  }
 
   protected readonly emptySeats = computed(
     () => this.agreement().filter((row) => row.empty).length,
@@ -317,6 +367,20 @@ export class TablePage implements OnDestroy {
   /** The secret kang / sagasa sheet, opened from the action bar. */
   protected readonly showMoves = signal(false);
 
+  /**
+   * Whether a tap on one of your own tiles blows it up instead of playing it.
+   *
+   * A mode rather than a gesture, because every other reading of a tap is already spoken for: the
+   * first tap lifts a tile to throw, a second throws it, and with Auto Arrange off a tap is how
+   * groups are built. A tile big enough to read is worth having on a phone, but not at the price of
+   * making any of those three ambiguous - so it is a switch you can see the state of, sitting next
+   * to Sort where the other hand controls are.
+   */
+  protected readonly zoomTiles = signal(false);
+
+  /** The tile blown up on screen, or null. Held as an id so a tile that leaves takes the sheet. */
+  protected readonly zoomedId = signal<number | null>(null);
+
   /** The tile being dragged, what it is over, and where to draw the ghost. */
   protected readonly dragged = signal<number | null>(null);
   protected readonly dropTarget = signal<DropSlot | null>(null);
@@ -367,6 +431,14 @@ export class TablePage implements OnDestroy {
         void this.game.disconnect();
         this.session.clear();
       });
+    });
+
+    // The table is over. Hang up, because nothing more is coming down that connection - but keep
+    // the token: unlike a freed seat, the seat is still this browser's, and the room and its
+    // finished hands are still there to look back at.
+    effect(() => {
+      if (!this.closedReason()) return;
+      untracked(() => void this.game.disconnect());
     });
   }
 
@@ -617,6 +689,11 @@ export class TablePage implements OnDestroy {
     return live && live.tile.id === claim.tile.id ? live : null;
   });
 
+  /** True once the pile is deep enough to be worth drawing smaller. See DENSE_DISCARDS. */
+  protected readonly denseDiscards = computed(
+    () => (this.view()?.discards.length ?? 0) >= DENSE_DISCARDS,
+  );
+
   /**
    * Reopens the calls off the tile in the pool. Same door as the Options button on the bar.
    *
@@ -761,6 +838,57 @@ export class TablePage implements OnDestroy {
     const chow = this.pendingClaim()?.chowPossible ?? false;
     return TablePage.MANUAL_KINDS.filter((kind) => kind !== 'Chow' || chow);
   });
+
+  /**
+   * The calls to put on the action bar itself, rather than only inside the dialog.
+   *
+   * Everything a player does now happens on one row at the bottom of the screen, within reach of
+   * the thumb already resting there: the dialog draws the tiles and is worth opening when there is
+   * a choice to make, but nobody should have to open anything to pung a tile.
+   *
+   * Empty once a call has been pressed and not yet paid for - the row is then Take and Cancel, and
+   * offering four more calls on top of the one being named would be offering to start again.
+   */
+  protected readonly barCalls = computed<BarCall[]>(() => {
+    const claim = this.pendingClaim();
+    if (!claim || claim.pressedKind) return [];
+
+    return barCallsFor(this.candidates(), this.callKinds(), this.assisted(), (kind) =>
+      this.kindLive(kind),
+    );
+  });
+
+  /** What a bar call says. The count only appears when there is actually a choice behind it. */
+  protected barCallWord(call: BarCall): string {
+    const word = call.kind === 'Todas' ? 'Todas!' : call.kind;
+    return call.options > 1 ? `${word} (${call.options})` : word;
+  }
+
+  /**
+   * Presses a call from the bar.
+   *
+   * One tap takes the tile whenever there is only one way to take it, which is the overwhelming
+   * majority of calls. More than one way and it opens the dialog instead: which two of three
+   * bamboos a chow eats is a decision, and guessing at it on the player's behalf would cost them
+   * tiles they were keeping. With assist off nothing has been read at all, so the press is only
+   * half an answer and the tiles it costs are tapped out of the hand afterwards.
+   */
+  protected pressBarCall(call: BarCall): void {
+    if (!call.live) return;
+
+    if (!this.assisted()) {
+      void this.pressCall(call.kind);
+      return;
+    }
+
+    if (call.options > 1) {
+      this.openClaimDialog();
+      return;
+    }
+
+    const candidate = this.candidates().find((c) => c.kind === call.kind);
+    if (candidate) void this.claimWith(candidate);
+  }
 
   /** What you have pressed and still owe tiles for, or null. */
   protected readonly pressedKind = computed<ClaimKind | null>(
@@ -1125,6 +1253,14 @@ export class TablePage implements OnDestroy {
       return;
     }
 
+    // Reading the tile comes before playing it. The switch is on screen with its state showing, so
+    // this is never a surprise - and the sheet it opens offers the throw as well, so turning it on
+    // is not a mode you have to leave again to play your turn.
+    if (this.zoomTiles()) {
+      this.zoomedId.set(tile.id);
+      return;
+    }
+
     // While somebody else's discard is up, a tap picks the tile out to claim with instead of
     // lifting it to be thrown. Every tile is tappable, including ones that cannot help: refusing
     // the tap would leave the player guessing why, which is what the message is for.
@@ -1352,6 +1488,29 @@ export class TablePage implements OnDestroy {
     void this.game.removeSeat(seat);
   }
 
+  /**
+   * The host's second press on Close. Ending a table takes everybody with it and cannot be undone,
+   * so it is never one tap - and the confirmation is inline rather than a sheet, because the thing
+   * being ended is the screen behind it.
+   */
+  protected readonly closing = signal(false);
+
+  protected closeTable(): void {
+    this.closing.set(false);
+    this.showHost.set(false);
+    void this.game.closeTable();
+  }
+
+  /**
+   * Puts the host sheet away, and takes the Close confirmation down with it. A half-pressed Close
+   * left standing behind a closed sheet is one tap away from ending the table the next time it is
+   * opened, which is not what the person who put the sheet away meant.
+   */
+  protected closeHostSheet(): void {
+    this.showHost.set(false);
+    this.closing.set(false);
+  }
+
   protected fillWithBots(): void {
     void this.game.fillWithBots();
   }
@@ -1495,7 +1654,8 @@ export class TablePage implements OnDestroy {
    * to a screen reader and still lets the tile be dragged.
    */
   protected readonly tileInert = computed(
-    () => !this.pendingClaim() && !this.tapGroups() && !this.canThrowNow(),
+    () =>
+      !this.zoomTiles() && !this.pendingClaim() && !this.tapGroups() && !this.canThrowNow(),
   );
 
   protected isGrouped(tileId: number): boolean {
@@ -1709,6 +1869,55 @@ export class TablePage implements OnDestroy {
     }
   }
 
+  // ---------------------------------------------------------------- looking at a tile
+
+  /**
+   * The tile blown up on screen, or null when nothing is.
+   *
+   * Resolved out of the hand each time rather than kept as a copy, so a tile that leaves some other
+   * way - thrown, taken into a kang, a hand that ends under it - takes the sheet with it instead of
+   * leaving it showing something that is no longer there.
+   */
+  protected readonly zoomedTile = computed<TileView | null>(() => {
+    const id = this.zoomedId();
+    if (id === null) return null;
+
+    return (this.me()?.concealed ?? []).find((tile) => tile.id === id) ?? null;
+  });
+
+  protected closeZoom(): void {
+    this.zoomedId.set(null);
+  }
+
+  protected toggleZoom(): void {
+    const next = !this.zoomTiles();
+    this.zoomTiles.set(next);
+
+    // Turning it on takes over what a tap means, so anything half-started by one is put back: a
+    // tile lifted to be thrown, and a tile picked up to be grouped with another.
+    if (next) {
+      this.selected.set(null);
+      this.held.set(null);
+      this.endDrag();
+    } else {
+      this.closeZoom();
+    }
+  }
+
+  /**
+   * Throws the tile the sheet is showing.
+   *
+   * The sheet is already the second look at it - one tap to blow it up, one to throw it - so there
+   * is no third question. That is the same two-tap shape as the confirm dialog it stands in for.
+   */
+  protected discardZoomed(): void {
+    const tile = this.zoomedTile();
+    if (!tile || !this.canThrowNow()) return;
+
+    this.closeZoom();
+    this.throwTile(tile.id);
+  }
+
   /** Lifts your box up over the discard pool so the whole hand is on screen, or drops it back. */
   protected toggleHandOpen(): void {
     const next = !this.handOpen();
@@ -1762,6 +1971,44 @@ export class TablePage implements OnDestroy {
       outcome.winnerSeat !== null ? view.seats[outcome.winnerSeat].displayName : 'Somebody';
     return `${name} declared todas`;
   }
+}
+
+/**
+ * The calls to put on the action bar, in the order they outrank each other.
+ *
+ * Two shapes in, one out. With the helper on, the server has already worked out every legal way
+ * this hand could take the tile, so the bar is built from those: one button per kind, carrying how
+ * many distinct shapes are behind it. With it off nothing has been read for this player at all, so
+ * the bar offers the bare calls the rules could allow off the tile and pressing one is only half an
+ * answer - which is why `options` is zero there rather than one. Either way, a call the table has
+ * already heard something better than comes through dead rather than missing: a button that
+ * vanished mid-window is a button the thumb was already on its way to.
+ *
+ * Free of the component on purpose - it reads its four arguments and nothing else - because the
+ * ordering and the counting are the whole of what makes one tap enough to pung a tile.
+ */
+export function barCallsFor(
+  candidates: readonly ClaimCandidateView[],
+  kinds: readonly ClaimKind[],
+  assisted: boolean,
+  isLive: (kind: ClaimKind) => boolean,
+): BarCall[] {
+  const call = (kind: ClaimKind, options: number): BarCall => ({
+    kind,
+    options,
+    live: isLive(kind),
+    testId: `bar-call-${kind}`,
+  });
+
+  if (!assisted) return kinds.map((kind) => call(kind, 0));
+
+  const counts = new Map<ClaimKind, number>();
+  for (const candidate of candidates)
+    counts.set(candidate.kind, (counts.get(candidate.kind) ?? 0) + 1);
+
+  return [...counts]
+    .sort(([a], [b]) => CLAIM_RANK[b] - CLAIM_RANK[a])
+    .map(([kind, options]) => call(kind, options));
 }
 
 /** Suit then rank, so a hand and a claim combination both read in the order players expect. */

@@ -70,10 +70,19 @@ dotnet publish server\src\Mahjong.Api -c Release -o publish
 
 Press **Draw** to take your tile off the wall, tap a tile to lift it, tap again to put it up, then
 answer **Discard Tile** - nothing leaves your hand on a tap alone. Dragging a tile into the middle
-throws it outright, no question asked. Every tile anybody throws comes up in a dialog over the top
-of the table, with whatever you may call on it - so nothing goes past while you are looking
-somewhere else. A tile a **bot** threw waits there until all three of you press **Next**; a tile a
+throws it outright, no question asked. Every call - **chow**, **pung**, **kang**, **todas** - is on
+the bar along the bottom, next to Draw, so nothing has to be opened first to answer a discard; the
+dialog over the table is there to draw the tiles a call would cost when there is a choice between
+two of them. A tile a **bot** threw waits there until all three of you press **Next**; a tile a
 person threw is on a short clock instead.
+
+Tiles are small on a phone. The **Zoom** switch above your hand turns a tap into a proper look at
+one tile, big enough to be sure of - and you can throw it from there.
+
+The seat that made the table gets a **Table** button of its own. From it the host can free a chair
+- a bot that is not wanted, or somebody who has stopped answering - which works in the lobby and
+between hands, never in the middle of one. The same button closes the table for everybody when the
+evening is over; the hands already played stay readable afterwards.
 
 Refreshing, closing the tab or losing wifi does not cost the seat: the same browser comes back to
 the same hand holding the same tiles.

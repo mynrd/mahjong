@@ -686,6 +686,15 @@
   min-width: 76px;
 }
 
+/* Beside Draw, and the same width as it, so the right-hand corner is two buttons of one size
+   rather than a wide one and a narrow one. It only exists while a discard is open, which is the
+   one thing on this bar that comes and goes on the right - Draw itself never moves, because Pass
+   appears to the left of it. */
+.btn.pass {
+  flex: 0 0 auto;
+  min-width: 76px;
+}
+
 /* Dead rather than gone. A disabled button that still reads as a button says "not yet"; one that
    vanished would say "there is no such thing", and the next turn would have to teach it again.
 
@@ -774,6 +783,46 @@
   flex-wrap: nowrap;
   gap: 8px;
   justify-content: center;
+}
+
+/* The calls themselves, on the bar. Four of them plus Take, Options, Pass and Draw is more than a
+   narrow phone has room for, and the bar is one fixed height whatever happens - so this row scrolls
+   sideways rather than wrapping or pushing anything off. The scrollbar is hidden: it would be two
+   pixels of chrome inside a 56px bar, and the row is short enough that a swipe is the obvious
+   gesture without one. */
+.bar-calls {
+  display: flex;
+  flex: 0 1 auto;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  scroll-snap-type: x proximity;
+  overscroll-behavior-x: contain;
+}
+
+.bar-calls::-webkit-scrollbar {
+  display: none;
+}
+
+/* Short and square-ish, so four of them read as one row of choices rather than four sentences.
+   `flex: 0 0 auto` because a Pung that has shrunk to "Pu" is worse than one you have to scroll to. */
+.btn.call {
+  flex: 0 0 auto;
+  padding: 7px 11px;
+  font-size: 13px;
+  scroll-snap-align: start;
+  white-space: nowrap;
+}
+
+/* Same treatment as the dead Draw and the dead calls in the dialog: a call already beaten stays
+   where it was, so the row does not reshuffle under a thumb, but it must not look live. */
+.btn.call:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  border-style: dashed;
+  box-shadow: none;
 }
 
 /* Take names the set it would make - "Take - Chow B3-B4-B5" - which is worth reading and is also
@@ -1113,6 +1162,16 @@
   --tile-w: 76px;
 }
 
+/* One tile, as big as the sheet will take it. Capped so it does not run off a tablet, and floored
+   in vw so it is genuinely bigger than the hand on the narrowest phone - which is the entire point
+   of having blown it up. */
+.zoom-tile {
+  display: grid;
+  place-items: center;
+  margin: 6px 0 10px;
+  --tile-w: min(180px, 46vw);
+}
+
 .confirm-what {
   margin: 12px 0 18px;
   font-size: 15px;
@@ -1344,6 +1403,17 @@
   color: var(--text-dim);
 }
 
+.sheet-body .small {
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+/* The seat list is the same list the offer uses, so it is drawn by the same rules; inside a sheet
+   it only needs its margins back. */
+.sheet-body .answers {
+  margin-bottom: 4px;
+}
+
 .btn.tiny {
   min-height: 32px;
   padding: 6px 12px;
@@ -1420,8 +1490,31 @@
     justify-content: center;
   }
 
+  /* The pool spans all three columns, so the pile has the whole width of the table to lay itself
+     out in. It used to be capped at roughly one column's worth, which left half the box empty and
+     folded the pile into twice as many rows as it needed - and rows are the expensive direction
+     here, because the pool's track is the one that only ever gets the height nothing else wanted.
+     Past that height the pile scrolls inside itself and the tiles thrown early go off the top,
+     which is the one thing a discard pool must not do. Uncapped it is nineteen tiles to a row
+     rather than ten, so a whole hand's worth of discards fits without scrolling anything.
+
+     There is no width here on purpose. The pile is a centred grid item, so it is exactly as wide
+     as the tiles in it and no wider, reaching the pool's full width only once it has to wrap:
+     three tiles still sit in the middle of the box, forty fill it.
+
+     Rows start at the left rather than centred once it does wrap. Centred, every tile thrown
+     shifts the ones already in the last row half a tile sideways, and the pile moves under you as
+     you read it. */
   .discards {
-    max-width: 620px;
+    justify-content: flex-start;
+  }
+
+  /* Width alone does not save a long hand: forty tiles is where even a full-width pile starts on
+     a third row, and the pool has only ever got the height nothing else wanted. So the tiles step
+     down once the pile is deep. That costs nothing to read - by then the pile is something you
+     scan rather than study, and the one tile that is still yours to answer is outlined anyway. */
+  .discards.dense {
+    --tile-discard: 38px;
   }
 }
 
@@ -1433,6 +1526,24 @@
     --tile-sm: 22px;
     --tile-discard: 56px;
     --hand-tile: 60px;
+  }
+
+  .discards.dense {
+    --tile-discard: 46px;
+  }
+}
+
+/* A laptop screen is wide but not tall, and the pool is the box that feels it: at 1366x768 it
+   measures about two rows deep, because the hand, the opponent cards and the bar take their
+   height first and the pool lives on what is left. Discards are drawn smaller here whatever the
+   depth of the pile - the width is not the problem on a screen this wide, the height is. */
+@media (min-width: 760px) and (max-height: 800px) {
+  .table {
+    --tile-discard: 40px;
+  }
+
+  .discards.dense {
+    --tile-discard: 34px;
   }
 }
 

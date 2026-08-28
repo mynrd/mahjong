@@ -27,6 +27,9 @@ public sealed class GameService(
 
         if (room.HostPlayerId != callerPlayerId) return Result.Fail("HostOnly");
 
+        if (room.Status == RoomStatus.Closed)
+            return Result.Fail("RoomClosed", "This table has been closed.");
+
         var humansAndBots = room.Players.Count;
         if (humansAndBots < MahjongGame.Seats)
             return Result.Fail("NotEnoughPlayers", $"{humansAndBots} of {MahjongGame.Seats} seats are taken.");
@@ -301,7 +304,16 @@ public sealed class GameService(
         }, cancel);
     }
 
-    /// <summary>Frees a seat whose player has stopped answering. Host only, never the host's own.</summary>
+    /// <summary>
+    /// Takes somebody out of a seat: a bot the host filled with, or a player who has stopped
+    /// answering. Host only, and never the host's own chair.
+    ///
+    /// The same method serves the lobby and the table between hands, because it is the same act
+    /// either way and the checks that matter - who is asking, and whether a hand is being played -
+    /// do not change with the screen it was asked from. It is deliberately refused mid-hand: that
+    /// seat is holding tiles the rules are still counting, and taking the player out from under
+    /// them would leave a hand nobody can finish.
+    /// </summary>
     public async Task<Result> RemoveSeatAsync(string code, Guid callerPlayerId, int seat, CancellationToken cancel = default)
     {
         var room = await LoadRoomAsync(code, cancel);
@@ -310,19 +322,87 @@ public sealed class GameService(
         if (room.HostPlayerId != callerPlayerId)
             return Result.Fail("HostOnly", "Only the seat that made the table can remove somebody from it.");
 
-        var session = registry.Find(code);
-        if (session is null) return Result.Fail("NoHandInProgress");
-
         var player = room.Players.FirstOrDefault(p => p.Seat == seat);
         if (player is null) return Result.Fail("SeatEmpty", "Nobody is sitting there.");
 
         if (player.Id == callerPlayerId)
             return Result.Fail("CannotRemoveHost", "You cannot remove yourself from your own table.");
 
+        // Created rather than looked up: a table still in the lobby has never had a session, and
+        // one with no hand in it costs nothing - the ticker skips a session holding no state.
+        var session = registry.GetOrCreate(room.Id, room.Code);
+
         return await session.RunAsync(async () =>
         {
+            if (session.State is { Phase: not GamePhase.HandOver })
+                return Result.Fail("HandInProgress", "You cannot take somebody out of a hand being played.");
+
             await RemoveAsync(session, room, player, "The host removed you from the table.", cancel);
+
+            // Nothing to settle or broadcast at a table that has never dealt: SettleAsync builds
+            // its view off a state that is not there yet, and the removal above has already been
+            // written. Everybody still in the lobby finds out on their next poll.
+            if (session.State is null) return Result.Ok();
+
             return await SettleAsync(session, room, cancel);
+        }, cancel);
+    }
+
+    /// <summary>
+    /// Ends the table for everybody. Host only.
+    ///
+    /// Unlike every other way a hand stops, this one does not produce a result: nobody declared and
+    /// the wall did not run out, so there is nothing to score and nothing to settle. The hand in
+    /// progress is marked abandoned rather than finished, which keeps it out of the replay list -
+    /// a hand with no ending is not one anybody can step through to a conclusion.
+    ///
+    /// The room row stays, and so do the players and every finished hand: closing a table is not
+    /// deleting it, and the replays are the reason people look at it afterwards.
+    /// </summary>
+    public async Task<Result> CloseTableAsync(string code, Guid callerPlayerId, CancellationToken cancel = default)
+    {
+        var room = await LoadRoomAsync(code, cancel);
+        if (room is null) return Result.Fail("RoomNotFound");
+
+        if (room.HostPlayerId != callerPlayerId)
+            return Result.Fail("HostOnly", "Only the seat that made the table can close it.");
+
+        if (room.Status == RoomStatus.Closed) return Result.Ok();
+
+        var session = registry.GetOrCreate(room.Id, room.Code);
+
+        return await session.RunAsync(async () =>
+        {
+            if (session.GameId is { } gameId)
+            {
+                var game = await db.Games.FirstOrDefaultAsync(g => g.Id == gameId, cancel);
+
+                if (game is { Status: GameStatus.InProgress })
+                {
+                    game.Status = GameStatus.Abandoned;
+                    game.EndedAt = clock.GetUtcNow();
+                }
+            }
+
+            room.Status = RoomStatus.Closed;
+
+            // The table is over, so nothing is left for the ticker to move: no bots to play, no
+            // claim window to expire. Cleared before the row is saved rather than after, so a tick
+            // landing between the two finds a session with nothing in it.
+            session.State = null;
+            session.GameId = null;
+            session.NextSeq = 1;
+            session.ClearProposal();
+            session.ClearReveals();
+
+            await db.SaveChangesAsync(cancel);
+
+            await hub.Clients.Group(GameHub.GroupFor(room.Code))
+                .SendAsync("TableClosed", "The host closed this table.", cancel);
+
+            logger.LogInformation("Room {Code} was closed by its host.", room.Code);
+
+            return Result.Ok();
         }, cancel);
     }
 

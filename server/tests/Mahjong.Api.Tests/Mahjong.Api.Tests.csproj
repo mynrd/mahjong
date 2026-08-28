@@ -25,6 +25,12 @@
     <Content Include="..\..\src\Mahjong.Api\appsettings.Development.json" Link="AppSettings\appsettings.Development.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- The hand-built table used by the domain tests, shared rather than copied: these tests set up
+       the same kang scenarios and then look at what the view builder makes of them. -->
+  <ItemGroup>
+    <Compile Include="..\Mahjong.Domain.Tests\TestTable.cs" Link="TestTable.cs" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\..\src\Mahjong.Api\Mahjong.Api.csproj" />
     <ProjectReference Include="..\..\src\Mahjong.Domain\Mahjong.Domain.csproj" />

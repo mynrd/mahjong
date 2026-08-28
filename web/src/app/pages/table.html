@@ -1,7 +1,18 @@
 <!-- The seat is gone from under this browser: left, or freed by the host. Said plainly and stayed
      put, rather than bouncing the player somewhere - being dropped onto the home screen with no
      explanation is how somebody concludes the app crashed. -->
-@if (removedReason(); as reason) {
+@if (closedReason(); as reason) {
+  <!-- The host ended the table. Nothing to go back to and nothing to sit down in again, so this
+       says so and offers the two things that still exist: the hands already played, and home. -->
+  <main class="loading" data-testid="table-closed">
+    <h2>This table is closed</h2>
+    <p class="muted">{{ reason }}</p>
+    <a class="btn" [routerLink]="['/room', code(), 'replay']" data-testid="closed-replays">
+      Look back at the hands
+    </a>
+    <a class="btn secondary" [routerLink]="['/']">Home</a>
+  </main>
+} @else if (removedReason(); as reason) {
   <main class="loading" data-testid="removed">
     <h2>You are no longer at this table</h2>
     <p class="muted">{{ reason }}</p>
@@ -41,6 +52,22 @@
         >
           Scores
         </button>
+
+        <!-- The seat that made the table gets the things only it can do, in one place it can reach
+             at any point in a hand. Up here rather than on the action bar because none of it is a
+             move: the bar is what you play with, and a bar that grew a Close button next to Draw
+             would be a bar with a way to end the game one slip away from the tile you meant to
+             take. -->
+        @if (isHost()) {
+          <button
+            class="chip"
+            type="button"
+            (click)="showHost.set(!showHost())"
+            data-testid="toggle-host"
+          >
+            Table
+          </button>
+        }
         @if (connection() !== 'connected') {
           <span class="chip warn" data-testid="connection">{{ connection() }}</span>
         }
@@ -204,7 +231,7 @@
              away from costs nothing: the tile is still lying there and this is the way back to it.
              The outline says only that the tile is unanswered, never what your hand could do with
              it, so every seat that has not answered sees exactly the same thing. -->
-        <div class="discards">
+        <div class="discards" [class.dense]="denseDiscards()">
           @for (discard of view.discards; track discard.tile.id) {
             <mj-tile
               [code]="discard.tile.code"
@@ -288,10 +315,11 @@
                 </span>
               }
 
-              <!-- The host's way past somebody who has stopped answering. Only for a seat that has
-                   not said yes, and never for the host's own: a table cannot free the chair that
-                   is the only one able to free chairs. -->
-              @if (isHost() && !row.empty && !row.accepted && row.seat !== view.hostSeat) {
+              <!-- The host's way past somebody who has stopped answering - and past a bot that
+                   is not wanted for the next game, which agreed the moment it sat down and so
+                   would never have shown a button under the old rule. Never the host's own chair:
+                   a table cannot free the one chair that is able to free chairs. -->
+              @if (canRemove(row)) {
                 <button
                   class="btn secondary tiny"
                   type="button"
@@ -375,6 +403,44 @@
           The hand is finished. Everybody has to say yes before the table deals again.
         </p>
 
+        <!-- Who is still sitting here, with the host's way of changing that. Between hands is the
+             one moment a chair can change hands without breaking anything: nobody is holding tiles
+             the rules are still counting, which is why the same button is not offered mid-hand and
+             the server refuses it there. -->
+        <ul class="answers" data-testid="table-seats">
+          @for (row of agreement(); track row.seat) {
+            <li [attr.data-testid]="'seat-row-' + row.seat" [class.empty]="row.empty">
+              <span class="wind">{{ row.wind }}</span>
+
+              <span class="who">
+                @if (row.empty) {
+                  <em class="muted">empty seat</em>
+                } @else {
+                  {{ row.name }}
+                  @if (row.isYou) {
+                    <em class="tag">you</em>
+                  }
+                  @if (row.isBot) {
+                    <em class="tag">bot</em>
+                  }
+                }
+              </span>
+
+              @if (canRemove(row)) {
+                <button
+                  class="btn secondary tiny"
+                  type="button"
+                  (click)="removeSeat(row.seat)"
+                  [attr.aria-label]="'Remove ' + row.name + ' from the table'"
+                  [attr.data-testid]="'remove-' + row.seat"
+                >
+                  Remove
+                </button>
+              }
+            </li>
+          }
+        </ul>
+
         <button
           class="btn"
           type="button"
@@ -383,6 +449,28 @@
         >
           Call another game
         </button>
+
+        <!-- Only while a chair is actually empty: somebody to fill it with, or a link to hand to
+             somebody who will. A chair freed by the Remove above is the usual way one gets here. -->
+        @if (emptySeats()) {
+          <div class="host-tools">
+            <button
+              class="btn secondary"
+              type="button"
+              (click)="fillWithBots()"
+              data-testid="fill-seats"
+            >
+              Fill {{ emptySeats() === 1 ? 'the empty seat' : 'the empty seats' }} with bots
+            </button>
+
+            <div class="invite">
+              <code class="link">{{ inviteUrl() }}</code>
+              <button class="btn secondary tiny" type="button" (click)="copyInvite()">
+                {{ copied() ? 'Copied' : 'Copy' }}
+              </button>
+            </div>
+          </div>
+        }
       </section>
     }
 
@@ -447,6 +535,27 @@
               <span class="state" aria-hidden="true">{{ arranged() ? 'ON' : 'OFF' }}</span>
             </button>
           }
+
+          <!-- A tile at hand size on a phone is about eleven millimetres of artwork, which is
+               readable right up until it is not. This makes a tap open the tile instead of playing
+               it. On/off in the chip for the same reason Auto Arrange carries its state: a switch
+               that changes what every tap does must never leave you guessing which way it is set.
+               The sheet it opens can throw the tile too, so turning it on is not a mode you have
+               to come back out of to take your turn. -->
+          <button
+            class="chip switch"
+            type="button"
+            [class.on]="zoomTiles()"
+            (click)="toggleZoom()"
+            [attr.aria-pressed]="zoomTiles()"
+            [attr.aria-label]="
+              'Tap a tile to enlarge it: ' + (zoomTiles() ? 'on' : 'off')
+            "
+            data-testid="zoom-tiles"
+          >
+            <span aria-hidden="true">Zoom</span>
+            <span class="state" aria-hidden="true">{{ zoomTiles() ? 'ON' : 'OFF' }}</span>
+          </button>
         </div>
 
         <!-- Shown only once a tile is actually picked up. Grouping is always available with Auto
@@ -541,13 +650,20 @@
     </section>
 
     <!-- ---------------------------------------------------------------- action bar
-         One row, one fixed height, whatever is going on. Everything that used to make it grow -
-         the claim options, one button per secret-kang face - now opens a sheet instead, so the bar
-         never moves under a thumb that is already on its way to it.
+         Everything a player does, on one row at the bottom of the screen. Chow, pung, kang and
+         todas are here on the tile that is up for claim; the throw, the declarations and Draw are
+         here on your own turn. Nothing has to be opened first to play - the sheets above are for
+         reading a set that a word cannot draw, never for reaching a move.
 
-         Two slots: whatever the turn is doing on the left, and Draw on the right for the whole
-         hand, lit or not. Every tile a player takes off the wall comes through that one button, so
-         it does not get to move around or come and go. -->
+         One fixed height, whatever is going on. Anything that would have made it taller - one
+         button per secret-kang face, a wrapping legend - opens a sheet instead, and the calls
+         scroll sideways rather than wrap, so the bar never moves under a thumb already on its way
+         to it.
+
+         Whatever the turn is doing on the left; on the right, Draw for the whole hand, lit or not,
+         with Pass beside it while a discard is open. Every tile a player takes off the wall comes
+         through that one button, so it does not get to move around or come and go - and the two
+         ways of saying no to a tile end up in the same corner as each other. -->
     <footer class="actions">
       <div class="bar">
         <div class="bar-body">
@@ -599,18 +715,79 @@
                   }
                 </div>
 
-                @if (callLine(); as line) {
+                <!-- The calls themselves, on the bar. Nothing about taking a discard needs a
+                     sheet opened first any more: one tap on Pung pungs it, because there is only
+                     one way to pung a tile. A call with more than one shape behind it - which two
+                     of three bamboos a chow eats - carries the count and opens the dialog, which
+                     is the one place that can draw the tiles each choice would cost.
+
+                     Scrolls sideways rather than wrapping: the bar is one row and one height
+                     whatever happens, and four calls plus Pass plus Draw do not fit across a
+                     narrow phone. -->
+                @if (barCalls().length) {
+                  <div class="bar-calls" data-testid="bar-calls">
+                    @for (call of barCalls(); track call.kind) {
+                      <button
+                        class="btn call"
+                        [class.danger]="call.kind === 'Todas'"
+                        type="button"
+                        (click)="pressBarCall(call)"
+                        [disabled]="!call.live"
+                        [attr.title]="call.live ? null : callLine()"
+                        [attr.data-testid]="call.testId"
+                        [attr.data-claim-kind]="call.kind"
+                        [attr.aria-label]="call.kind"
+                      >
+                        {{ barCallWord(call) }}
+                      </button>
+                    }
+                  </div>
+                } @else if (callLine(); as line) {
+                  <!-- Only when the calls are not up. Both would not fit on one row, and what has
+                       been called is already on the dead buttons above and spelled out in the
+                       dialog. -->
                   <span class="call-line" data-testid="claim-call-line">{{ line }}</span>
                 }
 
-                <!-- Take and Pass both live here, and only here. The sheet above is where the
-                     call is chosen and the tiles it costs are counted out; answering the window -
-                     taking the tile, or letting it go - is a bar action like every other one, so
-                     the thumb never has to leave the bar to finish what it started. -->
+                <!-- Taking the tile. Pass is not here: it sits over on the right against Draw,
+                     because passing and drawing are the two ways of not calling and the thumb
+                     goes to the same corner for both. The sheet above is where the tiles a call
+                     costs are counted out; everything that answers the window is on this bar. -->
                 <div class="claim-buttons">
+                  <!-- Take is for the tiles counted out by hand, whether that was done with the
+                       dialog open or straight off the bar: tapping tiles in your own hand works
+                       while nothing is open over the table, so the button that spends them has to
+                       be there too. It stays put and dead rather than appearing mid-window. -->
+                  @if (assisted()) {
+                    @if (claimDialogOpen() || pickMatch()) {
+                      <button
+                        class="btn take"
+                        type="button"
+                        (click)="takePick()"
+                        [disabled]="!pickMatch()"
+                        data-testid="claim-take"
+                      >
+                        {{ pickMatch() ? 'Take - ' + pickMatch()!.describe : 'Take' }}
+                      </button>
+                    }
+                  } @else if (claimDialogOpen() || pressedKind()) {
+                    <button
+                      class="btn take"
+                      type="button"
+                      (click)="confirmPress()"
+                      [disabled]="!pickReady()"
+                      data-testid="claim-take"
+                    >
+                      Take
+                    </button>
+                  }
+
+                  <!-- The way to the tiles themselves. Quiet now: the calls are on the bar, so
+                       this is for choosing between two shapes of the same call, not for making
+                       one. -->
                   @if (!claimDialogOpen()) {
                     <button
-                      class="btn"
+                      class="btn secondary"
                       type="button"
                       (click)="openClaimDialog()"
                       data-testid="claim-open"
@@ -623,36 +800,7 @@
                         Options
                       }
                     </button>
-                  } @else if (assisted()) {
-                    <button
-                      class="btn take"
-                      type="button"
-                      (click)="takePick()"
-                      [disabled]="!pickMatch()"
-                      data-testid="claim-take"
-                    >
-                      {{ pickMatch() ? 'Take - ' + pickMatch()!.describe : 'Take' }}
-                    </button>
-                  } @else {
-                    <button
-                      class="btn take"
-                      type="button"
-                      (click)="confirmPress()"
-                      [disabled]="!pickReady()"
-                      data-testid="claim-take"
-                    >
-                      Take
-                    </button>
                   }
-
-                  <button
-                    class="btn secondary"
-                    type="button"
-                    (click)="pass()"
-                    data-testid="claim-pass"
-                  >
-                    Pass
-                  </button>
                 </div>
               </div>
             } @else if (pending.outranked) {
@@ -748,6 +896,21 @@
             </span>
           }
         </div>
+
+        <!-- Pass sits against Draw rather than with the calls, because the two of them are the
+             same answer: this tile is not for me. Whichever way the window ends, the thumb goes to
+             the same corner - and the calls on the left can then grow or shrink without ever
+             moving the button most windows end on. -->
+        @if (pendingClaim()) {
+          <button
+            class="btn secondary pass"
+            type="button"
+            (click)="pass()"
+            data-testid="claim-pass"
+          >
+            Pass
+          </button>
+        }
 
         <!-- Always here, on or off, and always in the same place. Nothing takes a tile off the wall
              for you any more, so this is the one button the whole hand goes through - and a button
@@ -1044,6 +1207,48 @@
       </div>
     }
 
+    <!-- One tile, as big as the screen will take it. Opened by a tap while Zoom is on, and able
+         to throw what it is showing: having blown a tile up to be sure of it, the next thing a
+         player wants is to play it, and sending them back to the hand to find it again would be
+         the enlarging cancelling itself out. -->
+    @if (zoomedTile(); as tile) {
+      <div class="sheet" (click)="closeZoom()">
+        <div
+          class="sheet-body panel"
+          role="dialog"
+          [attr.aria-label]="label(tile.code)"
+          (click)="$event.stopPropagation()"
+          data-testid="tile-zoom"
+        >
+          <div class="zoom-tile">
+            <mj-tile [code]="tile.code" [joker]="isJoker(tile.code)" />
+          </div>
+
+          <p class="confirm-what" data-testid="tile-zoom-label">{{ label(tile.code) }}</p>
+
+          @if (canThrowNow()) {
+            <button
+              class="btn wide"
+              type="button"
+              (click)="discardZoomed()"
+              data-testid="tile-zoom-discard"
+            >
+              Discard Tile
+            </button>
+          }
+
+          <button
+            class="btn wide secondary"
+            type="button"
+            (click)="closeZoom()"
+            data-testid="tile-zoom-close"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    }
+
     <!-- Everything the dialog is not already showing as tiles. -->
     @if (!refusal() && lastError()) {
       <p class="floating-error" data-testid="move-error">{{ lastError() }}</p>
@@ -1121,6 +1326,122 @@
             data-testid="seat-sheet-close"
           >
             Close
+          </button>
+        </div>
+      </div>
+    }
+
+    <!-- Host only. Who is at the table and whether it goes on: the two things that are nobody
+         else's to decide, kept off the playing surface and behind one chip. -->
+    @if (showHost()) {
+      <div class="sheet" (click)="closeHostSheet()">
+        <div
+          class="sheet-body panel"
+          role="dialog"
+          aria-label="Table controls"
+          (click)="$event.stopPropagation()"
+          data-testid="host-sheet"
+        >
+          <h2>This table</h2>
+
+          <ul class="answers" data-testid="host-seats">
+            @for (row of agreement(); track row.seat) {
+              <li [attr.data-testid]="'host-seat-' + row.seat" [class.empty]="row.empty">
+                <span class="wind">{{ row.wind }}</span>
+
+                <span class="who">
+                  @if (row.empty) {
+                    <em class="muted">empty seat</em>
+                  } @else {
+                    {{ row.name }}
+                    @if (row.isYou) {
+                      <em class="tag">you</em>
+                    }
+                    @if (row.isBot) {
+                      <em class="tag">bot</em>
+                    }
+                  }
+                </span>
+
+                @if (canRemove(row)) {
+                  <button
+                    class="btn secondary tiny"
+                    type="button"
+                    (click)="removeSeat(row.seat)"
+                    [attr.aria-label]="'Remove ' + row.name + ' from the table'"
+                    [attr.data-testid]="'host-remove-' + row.seat"
+                  >
+                    Remove
+                  </button>
+                }
+              </li>
+            }
+          </ul>
+
+          <!-- Said rather than left to be discovered by a button that does nothing. A seat freed
+               mid-hand would be a seat still holding tiles the rules are counting, so the server
+               refuses it and this says why before anybody reaches for it. -->
+          @if (!handOver()) {
+            <p class="muted small" data-testid="host-seats-note">
+              Seats can only be freed between hands - the one being played is holding everybody's
+              tiles.
+            </p>
+          } @else if (emptySeats()) {
+            <button
+              class="btn wide secondary"
+              type="button"
+              (click)="fillWithBots()"
+              data-testid="host-fill-seats"
+            >
+              Fill {{ emptySeats() === 1 ? 'the empty seat' : 'the empty seats' }} with bots
+            </button>
+          }
+
+          <h3>Ending it</h3>
+
+          @if (closing()) {
+            <p class="muted small" data-testid="close-table-note">
+              This ends the table for everybody, including the hand being played. The hands already
+              finished stay readable afterwards.
+            </p>
+
+            <button
+              class="btn wide danger"
+              type="button"
+              (click)="closeTable()"
+              data-testid="close-table-confirm"
+            >
+              Close it
+            </button>
+
+            <button
+              class="btn wide secondary"
+              type="button"
+              (click)="closing.set(false)"
+              data-testid="close-table-cancel"
+            >
+              Keep playing
+            </button>
+          } @else {
+            <button
+              class="btn wide secondary"
+              type="button"
+              (click)="closing.set(true)"
+              data-testid="close-table"
+            >
+              Close the table
+            </button>
+          }
+
+          <!-- "Done" rather than "Close", because one button up from it is Close the table and
+               a sheet with two buttons called Close is a sheet somebody presses the wrong one on. -->
+          <button
+            class="btn wide secondary"
+            type="button"
+            (click)="closeHostSheet()"
+            data-testid="host-sheet-close"
+          >
+            Done
           </button>
         </div>
       </div>

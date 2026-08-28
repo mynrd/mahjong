@@ -18,6 +18,8 @@ public static class RoomEndpoints
         rooms.MapGet("/{code}", GetRoom);
         rooms.MapGet("/{code}/me", WhoAmI);
         rooms.MapPost("/{code}/bots", AddBots);
+        rooms.MapDelete("/{code}/seats/{seat:int}", RemoveSeat);
+        rooms.MapPost("/{code}/close", CloseRoom);
         rooms.MapPost("/{code}/start", StartHand);
     }
 
@@ -235,6 +237,84 @@ public static class RoomEndpoints
 
         var refreshed = await LoadAsync(db, normalised, cancel);
         return Results.Ok(ToView(refreshed!, config));
+    }
+
+    // ------------------------------------------------------------------ removing a seat
+
+    /// <summary>
+    /// Frees a seat from the lobby: a bot the host filled with, or somebody who sat down and is no
+    /// longer wanted at the table.
+    ///
+    /// The rules of who may do this, and when, live in <see cref="GameService"/> alongside the
+    /// version the table calls between hands - it is the same act from a different screen, and two
+    /// copies of "host only, never yourself, never mid-hand" would only drift apart.
+    /// </summary>
+    private static async Task<IResult> RemoveSeat(
+        string code,
+        int seat,
+        HttpContext http,
+        PlayerAuth auth,
+        GameService games,
+        MahjongDbContext db,
+        IConfiguration config,
+        CancellationToken cancel)
+    {
+        var normalised = RoomCode.Normalise(code);
+
+        var player = await auth.ResolveForRoomAsync(http, normalised, cancel);
+        if (player is null)
+            return Results.Json(new ErrorResponse("NotSeated"), statusCode: StatusCodes.Status401Unauthorized);
+
+        var result = await games.RemoveSeatAsync(normalised, player.Id, seat, cancel);
+
+        if (!result.Success)
+            return result.Error switch
+            {
+                "RoomNotFound" => Results.NotFound(new ErrorResponse(result.Error, result.Detail)),
+                "HostOnly" => Results.Json(new ErrorResponse(result.Error, result.Detail),
+                    statusCode: StatusCodes.Status403Forbidden),
+                _ => Results.Conflict(new ErrorResponse(result.Error!, result.Detail)),
+            };
+
+        var refreshed = await LoadAsync(db, normalised, cancel);
+        return refreshed is null
+            ? Results.NotFound(new ErrorResponse("RoomNotFound"))
+            : Results.Ok(ToView(refreshed, config));
+    }
+
+    // ------------------------------------------------------------------ closing the table
+
+    /// <summary>Ends the table for everybody. Host only, and the same act as the button at the table.</summary>
+    private static async Task<IResult> CloseRoom(
+        string code,
+        HttpContext http,
+        PlayerAuth auth,
+        GameService games,
+        MahjongDbContext db,
+        IConfiguration config,
+        CancellationToken cancel)
+    {
+        var normalised = RoomCode.Normalise(code);
+
+        var player = await auth.ResolveForRoomAsync(http, normalised, cancel);
+        if (player is null)
+            return Results.Json(new ErrorResponse("NotSeated"), statusCode: StatusCodes.Status401Unauthorized);
+
+        var result = await games.CloseTableAsync(normalised, player.Id, cancel);
+
+        if (!result.Success)
+            return result.Error switch
+            {
+                "RoomNotFound" => Results.NotFound(new ErrorResponse(result.Error, result.Detail)),
+                "HostOnly" => Results.Json(new ErrorResponse(result.Error, result.Detail),
+                    statusCode: StatusCodes.Status403Forbidden),
+                _ => Results.Conflict(new ErrorResponse(result.Error!, result.Detail)),
+            };
+
+        var refreshed = await LoadAsync(db, normalised, cancel);
+        return refreshed is null
+            ? Results.NotFound(new ErrorResponse("RoomNotFound"))
+            : Results.Ok(ToView(refreshed, config));
     }
 
     // ------------------------------------------------------------------ start a hand

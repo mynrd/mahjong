@@ -59,6 +59,13 @@ public sealed class GameHub(
         if (view is not null) await Clients.Caller.SendAsync("StateChanged", view);
 
         await Clients.Group(GroupFor(code)).SendAsync("SeatConnected", player.Seat, player.DisplayName);
+
+        // A browser that still holds a token for a table that has since been closed would otherwise
+        // sit on "Connecting to the table..." forever: there is no hand to build a view from and
+        // nothing is ever going to push one. Told on the way in instead.
+        if (player.Room.Status == RoomStatus.Closed)
+            await Clients.Caller.SendAsync("TableClosed", "This table has been closed.");
+
         await base.OnConnectedAsync();
     }
 
@@ -138,7 +145,16 @@ public sealed class GameHub(
     /// <summary>Host only: sits a bot in every seat still empty.</summary>
     public Task<Result> FillWithBots() => AsHost(games.FillSeatsWithBotsAsync);
 
-    /// <summary>Host only: frees the seat of somebody who has stopped answering.</summary>
+    /// <summary>
+    /// Host only: ends the table for everybody, mid-hand or between hands.
+    ///
+    /// Not a move and not a vote. The seat that made the table is the one that gets to say it is
+    /// over, and there is nothing for the other three to answer: a table nobody is dealing at is
+    /// already finished, the button only says so.
+    /// </summary>
+    public Task<Result> CloseTable() => AsHost(games.CloseTableAsync);
+
+    /// <summary>Host only: frees the seat of somebody who has stopped answering, or a bot.</summary>
     public async Task<Result> RemoveSeat(int seat)
     {
         if (Context.Items[RoomKey] is not string code || Context.Items[PlayerKey] is not Guid playerId)

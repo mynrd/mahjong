@@ -60,6 +60,24 @@ export class Api {
     );
   }
 
+  /**
+   * Frees a seat from the lobby: a bot that was filled in, or somebody who sat down and is no
+   * longer wanted. Host only, and refused once a hand is being played - the table has its own
+   * version of this over the hub for the gap between hands.
+   */
+  removeSeat(code: string, token: string, seat: number): Promise<RoomView> {
+    return firstValueFrom(
+      this.http.delete<RoomView>(`${this.base}/api/rooms/${code}/seats/${seat}`, { headers: auth(token) }),
+    );
+  }
+
+  /** Ends the table for everybody. Host only. The room and its finished hands stay readable. */
+  closeRoom(code: string, token: string): Promise<RoomView> {
+    return firstValueFrom(
+      this.http.post<RoomView>(`${this.base}/api/rooms/${code}/close`, {}, { headers: auth(token) }),
+    );
+  }
+
   startHand(code: string, token: string): Promise<{ started: boolean }> {
     return firstValueFrom(
       this.http.post<{ started: boolean }>(`${this.base}/api/rooms/${code}/start`, {}, { headers: auth(token) }),

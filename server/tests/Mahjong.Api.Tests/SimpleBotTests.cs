@@ -1,4 +1,4 @@
-using Mahjong.Domain;
+﻿using Mahjong.Domain;
 
 namespace Mahjong.Api.Tests;
 
@@ -60,6 +60,38 @@ public class SimpleBotTests
     {
         var state = Window(botHand, discard, assisted: assisted);
         state.Pending!.Passed.Add(BotSeat);
+        return state;
+    }
+
+    /// <summary>
+    /// The bot's own turn, with nothing pending: it holds <paramref name="botHand"/> and, if one is
+    /// given, has <paramref name="exposedPung"/> already down in front of it. Everything comes out
+    /// of one id pool, so the pung on the table is never the same physical tile as one in hand.
+    /// </summary>
+    private static GameState Turn(string botHand, string? exposedPung = null)
+    {
+        var refs = TileNotation.ParseRefs(exposedPung is null ? botHand : $"{botHand} {exposedPung}");
+        var held = TileNotation.Parse(botHand).Count;
+
+        var state = new GameState
+        {
+            Rules = RuleOptions.Default with { JokerEnabled = false },
+            HandNumber = 1,
+            ManoSeat = BotSeat,
+            Seed = 1,
+            Wall = TileSet.All.Where(t => refs.All(r => r.Id != t.Id)).ToList(),
+            FrontIndex = 0,
+            CurrentSeat = BotSeat,
+            Phase = GamePhase.AwaitingDiscard,
+        };
+
+        state.BackIndex = state.Wall.Count - 1;
+        state.Hands[BotSeat].Concealed.AddRange(refs.Take(held));
+
+        if (exposedPung is not null)
+            state.Hands[BotSeat].Melds.Add(
+                new ExposedMeld(SetKind.Pung, refs.Skip(held).ToList(), Concealed: false, DiscarderSeat));
+
         return state;
     }
 
@@ -223,5 +255,41 @@ public class SimpleBotTests
         var state = Window("11r 123d 456b 99c 258d 3b", "1r", assisted: false);
 
         Assert.IsType<GameMove.Claim>(SimpleBot.Decide(state, BotSeat, Now.AddSeconds(Patience)));
+    }
+
+    // ------------------------------------------------- what the bot never puts on the table
+
+    [Fact]
+    public void Four_copies_drawn_by_itself_are_never_declared_as_a_secret_kang()
+    {
+        // Why a human at this table has never once seen a bot's four tiles face down: the bot's
+        // whole on-turn policy is win or discard, so four copies just sit in its hand for the rest
+        // of the game. Every four-tile group a bot has ever shown came off somebody's discard.
+        var state = Turn("1111r 123d 456b 99c 258d");
+
+        Assert.IsType<GameMove.Discard>(SimpleBot.Decide(state, BotSeat, Now));
+    }
+
+    [Fact]
+    public void The_fourth_copy_of_an_exposed_pung_is_never_declared_as_sagasa()
+    {
+        var state = Turn("1r 123d 456b 99c 258d 3b", exposedPung: "111r");
+
+        Assert.IsType<GameMove.Discard>(SimpleBot.Decide(state, BotSeat, Now));
+    }
+
+    [Fact]
+    public void A_pung_it_has_already_exposed_cannot_be_kanged_off_a_later_discard_either()
+    {
+        // The other way the group could have grown in front of a bot. A kang claim is built from
+        // three copies in hand, and the three under an exposed pung are not in hand any more, so
+        // the window offers the bot nothing and it passes.
+        var state = Window("123d 456b 99c 258d 3b 7b", "1r");
+        state.Hands[BotSeat].Melds.Add(
+            new ExposedMeld(SetKind.Pung, TileNotation.ParseRefs("111r").ToList(), Concealed: false, DiscarderSeat));
+
+        Assert.Empty(MahjongGame.ClaimCandidates(state, state.Pending!.Tile, DiscarderSeat, BotSeat)
+            .Where(c => c.Kind == ClaimKind.Kang));
+        Assert.IsType<GameMove.Pass>(SimpleBot.Decide(state, BotSeat, Now));
     }
 }

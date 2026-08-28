@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component, OnDestroy, inject, input, signal } from '@angular/core';
-import { Router } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import QRCode from 'qrcode';
 import { Api, apiBaseUrl } from '../core/api';
 import { RoomView } from '../core/models';
@@ -9,9 +9,21 @@ import { readError } from '../core/errors';
 @Component({
   selector: 'mj-lobby',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [RouterLink],
   template: `
     <main class="wrap">
-      @if (room(); as room) {
+      <!-- Two ways this browser stops belonging here, said plainly and in place rather than by
+           bouncing somebody to the home screen with no explanation. -->
+      @if (gone(); as reason) {
+        <section class="panel gone" data-testid="lobby-gone">
+          <h1>{{ reason.title }}</h1>
+          <p class="muted">{{ reason.detail }}</p>
+          @if (reason.canRejoin) {
+            <a class="btn" [routerLink]="['/join', code()]" data-testid="lobby-rejoin">Sit down again</a>
+          }
+          <a class="btn secondary" routerLink="/">Home</a>
+        </section>
+      } @else if (room(); as room) {
         <header>
           <h1>{{ room.name }}</h1>
           <p class="muted">
@@ -43,6 +55,23 @@ import { readError } from '../core/errors';
                       <em class="tag you">you</em>
                     }
                   </span>
+
+                  <!-- The host's way of undoing a seat: a bot that was filled in and is not wanted
+                       after all, or somebody who sat down at the wrong table. Never on the host's
+                       own chair - the seat that can free chairs cannot free itself, or the table
+                       would be left with nobody able to deal it. -->
+                  @if (isHost() && !seat.isHost) {
+                    <button
+                      class="btn secondary tiny"
+                      type="button"
+                      (click)="remove(room, seat.seat)"
+                      [disabled]="busy()"
+                      [attr.aria-label]="'Remove ' + seat.displayName + ' from the table'"
+                      [attr.data-testid]="'lobby-remove-' + seat.seat"
+                    >
+                      Remove
+                    </button>
+                  }
                 } @else {
                   <span class="name muted" [attr.data-testid]="'seat-' + seat.seat + '-name'">waiting...</span>
                 }
@@ -98,6 +127,45 @@ import { readError } from '../core/errors';
             @if (!room.canStart) {
               <p class="muted small">All four seats have to be filled before dealing.</p>
             }
+
+            <!-- Ending the table, from the one screen where nothing is at stake yet. Asks first:
+                 it cannot be undone, everybody else is dropped with it, and it sits one row under
+                 the button that deals. -->
+            <div class="close-table">
+              @if (closing()) {
+                <p class="muted small">
+                  Closing ends this table for everybody. The hands already played stay readable.
+                </p>
+                <div class="actions">
+                  <button
+                    class="btn secondary"
+                    type="button"
+                    (click)="closing.set(false)"
+                    data-testid="lobby-close-cancel"
+                  >
+                    Keep the table
+                  </button>
+                  <button
+                    class="btn danger"
+                    type="button"
+                    (click)="close(room)"
+                    [disabled]="busy()"
+                    data-testid="lobby-close-confirm"
+                  >
+                    Close it
+                  </button>
+                </div>
+              } @else {
+                <button
+                  class="btn secondary"
+                  type="button"
+                  (click)="closing.set(true)"
+                  data-testid="lobby-close"
+                >
+                  Close the table
+                </button>
+              }
+            </div>
           </section>
         } @else {
           <p class="muted waiting" data-testid="waiting-for-host">
@@ -261,6 +329,34 @@ import { readError } from '../core/errors';
       text-align: center;
       font-size: 14px;
     }
+
+    /* Small enough to sit on a seat row without pushing the name off it, and quiet enough not to
+       compete with the two buttons that actually run the table. */
+    .btn.tiny {
+      flex: 0 0 auto;
+      padding: 5px 10px;
+      font-size: 12px;
+    }
+
+    /* Under a divider rather than in the row above: closing a table is not one of the two things
+       the host does every few minutes, and it must not sit next to Deal. */
+    .close-table {
+      display: grid;
+      gap: 10px;
+      margin-top: 16px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+    }
+
+    .gone {
+      display: grid;
+      gap: 12px;
+      text-align: center;
+    }
+
+    .gone h1 {
+      font-size: 22px;
+    }
   `,
 })
 export class LobbyPage implements OnDestroy {
@@ -279,6 +375,18 @@ export class LobbyPage implements OnDestroy {
   protected readonly mySeat = signal<number | null>(null);
   protected readonly isHost = signal(false);
 
+  /** The close button's second press. Ending a table is not something to do on one tap. */
+  protected readonly closing = signal(false);
+
+  /**
+   * Why this browser is no longer at this table, or null while it still is.
+   *
+   * Two causes and one panel: the host freed this seat, or the host closed the whole table. Both
+   * are noticed by the poll rather than pushed - the lobby holds no live connection - which is why
+   * the seat check below runs on every refresh rather than only when something looks wrong.
+   */
+  protected readonly gone = signal<GoneReason | null>(null);
+
   private timer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
@@ -286,7 +394,7 @@ export class LobbyPage implements OnDestroy {
   }
 
   ngOnDestroy(): void {
-    if (this.timer) clearInterval(this.timer);
+    this.stop();
   }
 
   private async begin(): Promise<void> {
@@ -308,23 +416,63 @@ export class LobbyPage implements OnDestroy {
     this.timer = setInterval(() => void this.refresh(), 1500);
   }
 
+  /**
+   * Reads the table back, through the endpoint that answers for the token rather than the public
+   * one.
+   *
+   * The difference matters now that a seat can be taken away: the public view of a room says
+   * nothing about whether this browser is still in it, and a seat freed and then filled by
+   * somebody else looks from the outside exactly like a seat that was never touched. Asking as
+   * this token instead makes "you are not at this table any more" a 401 rather than a guess.
+   */
   private async refresh(): Promise<void> {
-    try {
-      const room = await this.api.getRoom(this.code());
-      this.room.set(room);
+    const seat = this.session.forRoom(this.code());
+    if (!seat) return;
 
-      const seat = this.session.forRoom(this.code());
-      const mine = room.seats.find((s) => s.seat === seat?.seat);
-      this.isHost.set(mine?.isHost ?? false);
+    try {
+      const me = await this.api.whoAmI(this.code(), seat.token);
+
+      this.room.set(me.room);
+      this.mySeat.set(me.seat);
+      this.isHost.set(me.isHost);
+
+      // Closing does not take anybody's seat away, so the token still resolves and nothing above
+      // has failed. The table is simply over, and staying on a lobby that can never deal is worse
+      // than saying so.
+      if (me.room.status === 'Closed') {
+        this.stop();
+        this.gone.set({
+          title: 'This table has been closed',
+          detail: 'The player who made it ended the table.',
+          canRejoin: false,
+        });
+        return;
+      }
 
       // The host deals for everybody, so the other three are moved to the table by this poll.
-      if (room.status === 'Playing') {
-        if (this.timer) clearInterval(this.timer);
+      if (me.room.status === 'Playing') {
+        this.stop();
         await this.router.navigate(['/room', this.code(), 'table']);
       }
     } catch (error: unknown) {
+      if (isUnauthorised(error)) {
+        this.stop();
+        this.session.clear();
+        this.gone.set({
+          title: 'You are no longer at this table',
+          detail: 'The host freed your seat. It may still be open.',
+          canRejoin: true,
+        });
+        return;
+      }
+
       this.error.set(readError(error, 'Lost track of that table.'));
     }
+  }
+
+  private stop(): void {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
   }
 
   /**
@@ -379,6 +527,42 @@ export class LobbyPage implements OnDestroy {
     }
   }
 
+  /** Frees one seat: a bot that is not wanted after all, or somebody at the wrong table. */
+  protected async remove(room: RoomView, seat: number): Promise<void> {
+    const mine = this.session.forRoom(room.code);
+    if (!mine) return;
+
+    this.busy.set(true);
+    this.error.set(null);
+
+    try {
+      this.room.set(await this.api.removeSeat(room.code, mine.token, seat));
+    } catch (error: unknown) {
+      this.error.set(readError(error, 'Could not free that seat.'));
+    } finally {
+      this.busy.set(false);
+    }
+  }
+
+  /** Ends the table for everybody. The next poll is what puts the closed panel on screen. */
+  protected async close(room: RoomView): Promise<void> {
+    const mine = this.session.forRoom(room.code);
+    if (!mine) return;
+
+    this.busy.set(true);
+    this.error.set(null);
+
+    try {
+      await this.api.closeRoom(room.code, mine.token);
+      this.closing.set(false);
+      await this.refresh();
+    } catch (error: unknown) {
+      this.error.set(readError(error, 'Could not close the table.'));
+    } finally {
+      this.busy.set(false);
+    }
+  }
+
   protected async start(room: RoomView): Promise<void> {
     const seat = this.session.forRoom(room.code);
     if (!seat) return;
@@ -400,6 +584,24 @@ export class LobbyPage implements OnDestroy {
   protected windOf(seat: number): string {
     return ['E', 'S', 'W', 'N'][seat] ?? '?';
   }
+}
+
+/** Why this browser is no longer at the table, and whether there is a way back in. */
+interface GoneReason {
+  title: string;
+  detail: string;
+  canRejoin: boolean;
+}
+
+/**
+ * Whether the server refused the token rather than failing some other way.
+ *
+ * Only a 401 means the seat is gone. A 404, a timeout or a dropped wifi connection all have to
+ * leave the lobby where it is: telling somebody they have been removed because their phone lost
+ * signal for two seconds would be worse than the silence it replaces.
+ */
+function isUnauthorised(error: unknown): boolean {
+  return (error as { status?: number })?.status === 401;
 }
 
 /** Kept next to the lobby so the base URL is reachable for tests without importing the service. */
