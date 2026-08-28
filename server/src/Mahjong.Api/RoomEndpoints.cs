@@ -27,6 +27,8 @@ public static class RoomEndpoints
 
     private static async Task<IResult> CreateRoom(
         CreateRoomRequest request,
+        HttpContext http,
+        UserAuth users,
         MahjongDbContext db,
         IConfiguration config,
         IOptions<RuleOptions> ruleDefaults,
@@ -59,6 +61,11 @@ public static class RoomEndpoints
             RulesJson = GameJson.Serialize(rules),
         };
 
+        // Signing in is optional and stays optional: an account token on the request links the
+        // seat to it, and its absence just means this table is played by nobody in particular, the
+        // way every table worked before accounts existed.
+        var account = await users.ResolveAsync(http, cancel);
+
         var token = PlayerToken.Issue();
         var host = new Player
         {
@@ -66,6 +73,7 @@ public static class RoomEndpoints
             DisplayName = displayName,
             Seat = 0,
             TokenHash = PlayerToken.HashOf(token),
+            UserId = account?.Id,
         };
 
         room.Players.Add(host);
@@ -80,7 +88,8 @@ public static class RoomEndpoints
             host.Id,
             host.Seat,
             token,
-            IsHost: true));
+            IsHost: true,
+            Username: account?.Username));
     }
 
     // ------------------------------------------------------------------ join
@@ -88,6 +97,8 @@ public static class RoomEndpoints
     private static async Task<IResult> JoinRoom(
         string code,
         JoinRoomRequest request,
+        HttpContext http,
+        UserAuth users,
         MahjongDbContext db,
         IConfiguration config,
         CancellationToken cancel)
@@ -111,6 +122,35 @@ public static class RoomEndpoints
         if (room.Status == RoomStatus.Closed)
             return Results.Conflict(new ErrorResponse("RoomClosed"));
 
+        // As on create: signed in, the seat is recorded against the account and the hand ends up
+        // on its profile. Signed out, it is an anonymous seat and nothing is recorded anywhere.
+        var account = await users.ResolveAsync(http, cancel);
+
+        // An account that already has a chair here is given it back rather than a second one. This
+        // is the one thing registering buys at the table itself: a seat token lives in one browser,
+        // so a cleared cache or a switch to another phone used to mean the chair was stranded with
+        // nobody able to prove it was theirs. Knowing the account password and the table password
+        // is proof enough, and a fresh seat token is issued on the same row.
+        if (account is not null &&
+            room.Players.FirstOrDefault(p => p.UserId == account.Id) is { } existing)
+        {
+            var reissued = PlayerToken.Issue();
+            existing.TokenHash = PlayerToken.HashOf(reissued);
+            existing.DisplayName = displayName;
+            existing.LastSeenAt = DateTimeOffset.UtcNow;
+
+            await db.SaveChangesAsync(cancel);
+
+            return Results.Ok(new SeatedResponse(
+                room.Code,
+                InviteUrl(config, room.Code),
+                existing.Id,
+                existing.Seat,
+                reissued,
+                IsHost: room.HostPlayerId == existing.Id,
+                Username: account.Username));
+        }
+
         // Seats are claimed optimistically. Two people tapping Join at the same moment both pick
         // the same free seat, and the unique index on (RoomId, Seat) makes one of them lose; that
         // one simply tries the next free seat. Checking first and then inserting would leave a
@@ -133,6 +173,7 @@ public static class RoomEndpoints
                 DisplayName = displayName,
                 Seat = free[0],
                 TokenHash = PlayerToken.HashOf(token),
+                UserId = account?.Id,
             };
 
             db.Players.Add(player);
@@ -147,7 +188,8 @@ public static class RoomEndpoints
                     player.Id,
                     player.Seat,
                     token,
-                    IsHost: false));
+                    IsHost: false,
+                    Username: account?.Username));
             }
             catch (DbUpdateException)
             {

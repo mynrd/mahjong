@@ -10,6 +10,7 @@ import {
   ReplayView,
   TileView,
 } from '../core/models';
+import { Account } from '../core/account';
 import { ReplaySession } from '../core/replay-session';
 import { Tile, describe } from '../ui/tile';
 import { readError } from '../core/errors';
@@ -516,6 +517,7 @@ export class ReplayPage {
   readonly hand = input.required<string>();
 
   private readonly api = inject(Api);
+  private readonly account = inject(Account);
   private readonly replays = inject(ReplaySession);
   private readonly router = inject(Router);
 
@@ -549,7 +551,9 @@ export class ReplayPage {
   }
 
   private async load(): Promise<void> {
-    const token = this.replays.tokenFor(this.code());
+    // The account token stands in for the unlock token on a table this account sat at, which is
+    // how a hand opened from a profile skips the password it was never asked for.
+    const token = this.replays.tokenFor(this.code()) ?? this.account.token();
 
     if (!token) {
       // The list page is where the password gets asked for, so send them there rather than growing

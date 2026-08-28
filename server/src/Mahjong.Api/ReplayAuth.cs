@@ -12,7 +12,7 @@ namespace Mahjong.Api;
 /// replay link is opened from a browser that usually never took a seat, so there is no seat token
 /// to present, and issuing a real seat would be far too much authority for reading old hands.
 /// </summary>
-public sealed class ReplayAuth(MahjongDbContext db, TimeProvider clock)
+public sealed class ReplayAuth(MahjongDbContext db, TimeProvider clock, UserAuth users)
 {
     /// <summary>
     /// How long an unlock lasts. Long enough to sit and go through a night's hands, short enough
@@ -61,13 +61,36 @@ public sealed class ReplayAuth(MahjongDbContext db, TimeProvider clock)
             .Include(t => t.Room)
             .FirstOrDefaultAsync(t => t.TokenHash == hash, cancel);
 
-        if (granted?.Room is null) return null;
-        if (granted.ExpiresAt <= clock.GetUtcNow()) return null;
+        if (granted?.Room is not null &&
+            granted.ExpiresAt > clock.GetUtcNow() &&
+            // A token for one room must not open another. Without this the check would be "did you
+            // know *a* password", not "did you know *this* one".
+            string.Equals(granted.Room.Code, roomCode, StringComparison.OrdinalIgnoreCase))
+        {
+            return granted.Room;
+        }
 
-        // A token for one room must not open another. Without this the check would be "did you know
-        // *a* password", not "did you know *this* one".
-        return string.Equals(granted.Room.Code, roomCode, StringComparison.OrdinalIgnoreCase)
-            ? granted.Room
-            : null;
+        return await SeatedAccountRoomAsync(token, roomCode, cancel);
+    }
+
+    /// <summary>
+    /// The other way in: a signed-in account that actually sat at this table.
+    ///
+    /// Somebody who played a hand should not have to remember the table password to look their own
+    /// hand up weeks later - that is most of what a profile is for. It grants no more than the
+    /// password does, and less broadly: it opens exactly the rooms this account has a seat in, and
+    /// a room it never played stays shut whatever it is holding.
+    /// </summary>
+    private async Task<Room?> SeatedAccountRoomAsync(string token, string roomCode, CancellationToken cancel)
+    {
+        var account = await users.ResolveAsync(token, cancel);
+        if (account is null) return null;
+
+        var normalised = RoomCode.Normalise(roomCode);
+
+        return await db.Players
+            .Where(p => p.UserId == account.Id && p.Room!.Code == normalised)
+            .Select(p => p.Room!)
+            .FirstOrDefaultAsync(cancel);
     }
 }

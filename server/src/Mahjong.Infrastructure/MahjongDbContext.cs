@@ -13,6 +13,8 @@ public class MahjongDbContext(DbContextOptions<MahjongDbContext> options) : DbCo
     public DbSet<SettlementRow> Settlements => Set<SettlementRow>();
     public DbSet<HandArrangement> HandArrangements => Set<HandArrangement>();
     public DbSet<ReplayToken> ReplayTokens => Set<ReplayToken>();
+    public DbSet<UserAccount> Users => Set<UserAccount>();
+    public DbSet<UserSession> UserSessions => Set<UserSession>();
 
     protected override void OnModelCreating(ModelBuilder model)
     {
@@ -38,6 +40,25 @@ public class MahjongDbContext(DbContextOptions<MahjongDbContext> options) : DbCo
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
+        model.Entity<UserAccount>(user =>
+        {
+            // What makes a username first come first served. Doing it as an index rather than as a
+            // "is this taken" read followed by an insert matters under a race: two people
+            // registering the same name in the same second both see it free, and only one of them
+            // can get past this.
+            user.HasIndex(u => u.UsernameKey).IsUnique();
+
+            user.HasMany(u => u.Sessions)
+                .WithOne(s => s.User!)
+                .HasForeignKey(s => s.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        model.Entity<UserSession>(session =>
+        {
+            session.HasIndex(s => s.TokenHash);
+        });
+
         model.Entity<Player>(player =>
         {
             // Two players can never end up on the same seat, however concurrent the joins are.
@@ -45,6 +66,17 @@ public class MahjongDbContext(DbContextOptions<MahjongDbContext> options) : DbCo
             // the check-then-insert in application code, which has a window.
             player.HasIndex(p => new { p.RoomId, p.Seat }).IsUnique();
             player.HasIndex(p => p.TokenHash);
+
+            // Every seat one account has ever taken, which is the whole of a profile's game list.
+            player.HasIndex(p => p.UserId);
+
+            // Deleting an account leaves the seats it played behind, holding null. The alternative
+            // is losing hands from other people's replays because one of the four registered and
+            // then changed their mind, which would make a finished hand rewrite itself.
+            player.HasOne(p => p.User)
+                .WithMany()
+                .HasForeignKey(p => p.UserId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         model.Entity<Game>(game =>

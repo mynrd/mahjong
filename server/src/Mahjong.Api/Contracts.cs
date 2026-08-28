@@ -42,13 +42,19 @@ public sealed record JoinRoomRequest
 /// What a player gets back after creating or joining. The token is the whole session: it is
 /// stored client-side and replayed to reattach to the same seat after a refresh.
 /// </summary>
+/// <param name="Username">
+/// The account this seat was recorded against, when the request came in signed in. Null for an
+/// anonymous seat, which is still the normal way to play - it is sent back so the client can say
+/// whether the hand about to be played will end up on anybody's profile.
+/// </param>
 public sealed record SeatedResponse(
     string RoomCode,
     string InviteUrl,
     Guid PlayerId,
     int Seat,
     string PlayerToken,
-    bool IsHost);
+    bool IsHost,
+    string? Username = null);
 
 /// <summary>One seat as shown in the lobby.</summary>
 public sealed record SeatView(

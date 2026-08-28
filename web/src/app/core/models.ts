@@ -209,6 +209,51 @@ export interface SeatedResponse {
   seat: number;
   playerToken: string;
   isHost: boolean;
+  /** The account the seat was recorded against, or null for an anonymous seat. */
+  username: string | null;
+}
+
+/** What registering or signing in hands back. The token is the session. */
+export interface SignedInResponse {
+  userId: string;
+  username: string;
+  token: string;
+  expiresAt: string;
+}
+
+/** One finished hand a registered player had a seat in. */
+export interface PlayedGameView {
+  roomCode: string;
+  roomName: string;
+  handNumber: number;
+  startedAt: string;
+  endedAt: string | null;
+  yourSeat: number;
+  winnerSeat: number | null;
+  winnerName: string | null;
+  youWon: boolean;
+  reason: HandEndReason | string;
+  totalUnits: number;
+  /** Signed, in scoring units: what the hand paid or cost this player over every settlement. */
+  yourDelta: number;
+  /** False for a hand played before frames were recorded - a result with nothing to step through. */
+  canReplay: boolean;
+}
+
+export interface ProfileStatsView {
+  handsPlayed: number;
+  handsWon: number;
+  tables: number;
+  netUnits: number;
+  bestHandUnits: number;
+}
+
+export interface ProfileView {
+  userId: string;
+  username: string;
+  createdAt: string;
+  stats: ProfileStatsView;
+  games: PlayedGameView[];
 }
 
 export interface WhoAmIResponse {

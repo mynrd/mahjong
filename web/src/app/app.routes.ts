@@ -7,6 +7,26 @@ export const routes: Routes = [
     loadComponent: () => import('./pages/home').then((m) => m.HomePage),
   },
   {
+    // Registering and signing in are the same page, opened on one half or the other. The mode is
+    // route data rather than a query parameter so both have a URL worth linking to.
+    path: 'register',
+    title: 'Register - Mahjong',
+    data: { mode: 'register' },
+    loadComponent: () => import('./pages/account').then((m) => m.AccountPage),
+  },
+  {
+    path: 'sign-in',
+    title: 'Sign in - Mahjong',
+    data: { mode: 'signIn' },
+    loadComponent: () => import('./pages/account').then((m) => m.AccountPage),
+  },
+  {
+    // Your account: the hands you have played, and the way back into any of them.
+    path: 'me',
+    title: 'Your games - Mahjong',
+    loadComponent: () => import('./pages/profile').then((m) => m.ProfilePage),
+  },
+  {
     // Where an invite link lands. The room code is bound straight into the component input.
     path: 'join/:code',
     title: 'Join a table - Mahjong',

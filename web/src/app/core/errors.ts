@@ -18,6 +18,16 @@ export function readError(error: unknown, fallback: string): string {
       return 'Only the player who made the table can do that.';
     case 'HandInProgress':
       return 'A hand is already being played.';
+    case 'UsernameTaken':
+      return 'That username is taken. Usernames are first come, first served.';
+    case 'BadUsername':
+      return 'Between 3 and 24 characters: letters, numbers, and . _ - only.';
+    case 'WeakPassword':
+      return 'Use at least 8 characters.';
+    case 'BadCredentials':
+      return 'That username and password do not match.';
+    case 'NotSignedIn':
+      return 'Sign in to see your games.';
     default:
       return body?.error ?? fallback;
   }

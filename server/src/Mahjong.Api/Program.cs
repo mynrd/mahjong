@@ -25,6 +25,7 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 builder.Services.Configure<RuleOptions>(builder.Configuration.GetSection("Mahjong:Rules"));
 
 builder.Services.AddScoped<PlayerAuth>();
+builder.Services.AddScoped<UserAuth>();
 builder.Services.AddScoped<ReplayAuth>();
 builder.Services.AddScoped<GameService>();
 
@@ -73,6 +74,7 @@ var staticFiles = new StaticFileOptions
 app.UseDefaultFiles();
 app.UseStaticFiles(staticFiles);
 
+app.MapUserEndpoints();
 app.MapRoomEndpoints();
 app.MapReplayEndpoints();
 app.MapHub<GameHub>("/hubs/game");

@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
+import { Account } from '../core/account';
 import { Api } from '../core/api';
 import { readError } from '../core/errors';
 import { Session } from '../core/session';
@@ -22,8 +23,24 @@ type Mode = 'create' | 'join';
     <main class="wrap">
       <header>
         <h1>Mahjong</h1>
-        <p class="muted">Filipino rules. Four players, sixteen tiles, no accounts.</p>
+        <p class="muted">Filipino rules. Four players, sixteen tiles.</p>
       </header>
+
+      <!-- An account is optional and sits above the two things you came here to do rather than in
+           front of them. Signed in, the hands played from this browser are recorded against the
+           name and can be read back later; signed out, the table works exactly as it always has. -->
+      @if (username(); as name) {
+        <p class="account" data-testid="account-strip">
+          Signed in as <strong>{{ name }}</strong> &middot;
+          <a routerLink="/me" data-testid="account-profile">Your games</a>
+        </p>
+      } @else {
+        <p class="account muted" data-testid="account-strip">
+          <a routerLink="/register" data-testid="account-register">Register</a> or
+          <a routerLink="/sign-in" data-testid="account-signin">sign in</a> to keep a record of the
+          hands you play.
+        </p>
+      }
 
       <div class="modes" role="tablist" aria-label="Start or join a table">
         <button
@@ -215,6 +232,16 @@ type Mode = 'create' | 'join';
       accent-color: var(--gold);
     }
 
+    .account {
+      margin: 0 0 16px;
+      padding: 10px 12px;
+      font-size: 13.5px;
+      text-align: center;
+      background: rgba(0, 0, 0, 0.22);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+    }
+
     .rejoin {
       margin-top: 18px;
     }
@@ -227,8 +254,11 @@ type Mode = 'create' | 'join';
 })
 export class HomePage {
   private readonly api = inject(Api);
+  private readonly account = inject(Account);
   private readonly session = inject(Session);
   private readonly router = inject(Router);
+
+  protected readonly username = this.account.username;
 
   protected readonly mode = signal<Mode>('create');
 
@@ -242,6 +272,13 @@ export class HomePage {
   protected readonly busy = signal(false);
   protected readonly error = signal<string | null>(null);
   protected readonly rejoin = this.session.current;
+
+  constructor() {
+    // Signed in, the name on the account is the one to play under - it is what the other three see
+    // and what the profile lists the hand against. Still editable: it is a display name, and the
+    // table it is typed at is where that choice belongs.
+    this.displayName = this.username() ?? '';
+  }
 
   protected async create(): Promise<void> {
     if (this.busy()) return;
@@ -263,12 +300,15 @@ export class HomePage {
     this.error.set(null);
 
     try {
-      const seated = await this.api.createRoom({
-        name,
-        password: this.password,
-        displayName,
-        assistEnabled: this.allowHelper,
-      });
+      const seated = await this.api.createRoom(
+        {
+          name,
+          password: this.password,
+          displayName,
+          assistEnabled: this.allowHelper,
+        },
+        this.account.token(),
+      );
 
       this.session.save({
         roomCode: seated.roomCode,

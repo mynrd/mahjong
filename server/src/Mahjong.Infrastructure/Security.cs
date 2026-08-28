@@ -85,3 +85,39 @@ public static class RoomCode
     public static bool IsWellFormed(string code) =>
         code.Length == Length && code.All(Alphabet.Contains);
 }
+
+/// <summary>
+/// What counts as a username, and what two of them being "the same" means.
+///
+/// Usernames are handed out first come first served, so the comparison has to be decided in one
+/// place: the unique index is on <see cref="UserAccount.UsernameKey"/>, and this is what fills it.
+/// Case is folded away, because "Mynard" and "mynard" being two different people at the same table
+/// is a way to be impersonated rather than a feature.
+/// </summary>
+public static class UserName
+{
+    public const int MinLength = 3;
+    public const int MaxLength = 24;
+
+    /// <summary>What a password has to reach. Longer than a room password: this one outlives one evening.</summary>
+    public const int MinPasswordLength = 8;
+
+    public const int MaxPasswordLength = 128;
+
+    /// <summary>The index key for a name. Trimmed and folded, so it is what uniqueness is judged on.</summary>
+    public static string KeyOf(string username) => username.Trim().ToLowerInvariant();
+
+    /// <summary>
+    /// Letters, digits, and the three joiners people actually use. Deliberately narrow: a name
+    /// with a space at each end, or one written in characters that render as another name, is a
+    /// problem at a table where the only thing telling two players apart is what is on the screen.
+    /// </summary>
+    public static bool IsWellFormed(string username)
+    {
+        var trimmed = username.Trim();
+
+        if (trimmed.Length is < MinLength or > MaxLength) return false;
+
+        return trimmed.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '.' or '-');
+    }
+}
