@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, inject, input, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
+import { Account } from '../core/account';
 import { Api } from '../core/api';
 import { readError } from '../core/errors';
 import { Session } from '../core/session';
@@ -98,6 +99,7 @@ export class JoinForm {
   readonly code = input<string | null>(null);
 
   private readonly api = inject(Api);
+  private readonly account = inject(Account);
   private readonly session = inject(Session);
   private readonly router = inject(Router);
 
@@ -107,6 +109,12 @@ export class JoinForm {
 
   protected readonly busy = signal(false);
   protected readonly error = signal<string | null>(null);
+
+  constructor() {
+    // Signed in, the account name is offered as the name to sit down under. It stays editable:
+    // what the other three see is a display name, not the account.
+    this.displayName = this.account.username() ?? '';
+  }
 
   protected async join(): Promise<void> {
     if (this.busy()) return;
@@ -128,7 +136,11 @@ export class JoinForm {
     this.error.set(null);
 
     try {
-      const seated = await this.api.joinRoom(code, { displayName, password: this.password });
+      const seated = await this.api.joinRoom(
+        code,
+        { displayName, password: this.password },
+        this.account.token(),
+      );
 
       this.session.save({
         roomCode: seated.roomCode,

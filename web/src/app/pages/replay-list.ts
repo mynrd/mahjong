@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, inject, input, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
+import { Account } from '../core/account';
 import { Api } from '../core/api';
 import { ReplayListItemView } from '../core/models';
 import { ReplaySession } from '../core/replay-session';
@@ -221,6 +222,7 @@ export class ReplayListPage {
   readonly code = input.required<string>();
 
   private readonly api = inject(Api);
+  private readonly account = inject(Account);
   private readonly replays = inject(ReplaySession);
 
   protected password = '';
@@ -234,15 +236,21 @@ export class ReplayListPage {
     queueMicrotask(() => this.resume());
   }
 
-  /** Uses the token this tab already holds, if there is one, so the password is asked for once. */
+  /**
+   * Opens the list without asking, when this browser already holds something that will do: the
+   * unlock token from typing the password earlier in this tab, or an account token, which the
+   * server accepts for the rooms that account actually sat in. Somebody who played the hand should
+   * not have to remember the table password to read their own game back.
+   */
   private async resume(): Promise<void> {
-    const token = this.replays.tokenFor(this.code());
+    const token = this.replays.tokenFor(this.code()) ?? this.account.token();
     if (!token) return;
 
     try {
       await this.load(token);
     } catch {
-      // Expired, or the password was changed under it. Falls back to the form.
+      // Expired, the password was changed under it, or this account never sat at this table.
+      // Falls back to the form.
       this.replays.clear(this.code());
     }
   }

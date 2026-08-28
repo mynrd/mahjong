@@ -2,11 +2,14 @@ import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 import {
+  PlayedGameView,
+  ProfileView,
   ReplayListItemView,
   ReplayUnlockResponse,
   ReplayView,
   RoomView,
   SeatedResponse,
+  SignedInResponse,
   WhoAmIResponse,
 } from './models';
 
@@ -31,17 +34,65 @@ export class Api {
   private readonly http = inject(HttpClient);
   private readonly base = apiBaseUrl();
 
-  createRoom(body: {
-    name: string;
-    password: string;
-    displayName: string;
-    assistEnabled: boolean;
-  }): Promise<SeatedResponse> {
-    return firstValueFrom(this.http.post<SeatedResponse>(`${this.base}/api/rooms`, body));
+  /**
+   * `accountToken` is optional throughout: sent, the seat is recorded against that account and the
+   * hands played from it land on its profile; left out, the table works exactly as it always has,
+   * with nobody signed in and nothing recorded.
+   */
+  createRoom(
+    body: { name: string; password: string; displayName: string; assistEnabled: boolean },
+    accountToken?: string | null,
+  ): Promise<SeatedResponse> {
+    return firstValueFrom(
+      this.http.post<SeatedResponse>(`${this.base}/api/rooms`, body, {
+        headers: auth(accountToken),
+      }),
+    );
   }
 
-  joinRoom(code: string, body: { displayName: string; password: string }): Promise<SeatedResponse> {
-    return firstValueFrom(this.http.post<SeatedResponse>(`${this.base}/api/rooms/${code}/join`, body));
+  joinRoom(
+    code: string,
+    body: { displayName: string; password: string },
+    accountToken?: string | null,
+  ): Promise<SeatedResponse> {
+    return firstValueFrom(
+      this.http.post<SeatedResponse>(`${this.base}/api/rooms/${code}/join`, body, {
+        headers: auth(accountToken),
+      }),
+    );
+  }
+
+  // ------------------------------------------------------------------ accounts
+
+  /** Claims a username. Refused with UsernameTaken if somebody registered it first. */
+  register(body: { username: string; password: string }): Promise<SignedInResponse> {
+    return firstValueFrom(
+      this.http.post<SignedInResponse>(`${this.base}/api/users/register`, body),
+    );
+  }
+
+  signIn(body: { username: string; password: string }): Promise<SignedInResponse> {
+    return firstValueFrom(this.http.post<SignedInResponse>(`${this.base}/api/users/login`, body));
+  }
+
+  /** Drops this browser's session server side. Other devices stay signed in. */
+  signOut(token: string): Promise<unknown> {
+    return firstValueFrom(
+      this.http.post(`${this.base}/api/users/logout`, {}, { headers: auth(token) }),
+    );
+  }
+
+  /** Who you are, and every finished hand you had a seat in. */
+  profile(token: string): Promise<ProfileView> {
+    return firstValueFrom(
+      this.http.get<ProfileView>(`${this.base}/api/users/me`, { headers: auth(token) }),
+    );
+  }
+
+  myGames(token: string): Promise<PlayedGameView[]> {
+    return firstValueFrom(
+      this.http.get<PlayedGameView[]>(`${this.base}/api/users/me/games`, { headers: auth(token) }),
+    );
   }
 
   getRoom(code: string): Promise<RoomView> {
@@ -109,6 +160,7 @@ export class Api {
   }
 }
 
-function auth(token: string): HttpHeaders {
-  return new HttpHeaders({ Authorization: `Bearer ${token}` });
+/** No token means no Authorization header, rather than one reading "Bearer null". */
+function auth(token: string | null | undefined): HttpHeaders {
+  return token ? new HttpHeaders({ Authorization: `Bearer ${token}` }) : new HttpHeaders();
 }

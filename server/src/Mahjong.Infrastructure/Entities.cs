@@ -32,8 +32,12 @@ public enum GameStatus
 
 /// <summary>
 /// A table. The room code goes in the invite link and the password gates who can sit down.
-/// There are no user accounts anywhere in this schema on purpose: a room plus a seat is the whole
-/// identity model.
+///
+/// A room plus a seat is still the whole identity model as far as playing goes: nothing here knows
+/// about <see cref="UserAccount"/>, and a table where nobody registered works exactly as it always
+/// did. An account is a layer over the top, reached only through the nullable
+/// <see cref="Player.UserId"/>, and all it does is let the hands played at a table be found again
+/// afterwards by somebody who no longer remembers its code.
 /// </summary>
 public class Room
 {
@@ -100,6 +104,9 @@ public class ReplayToken
 /// <summary>
 /// Somebody sitting at a table. A player exists only inside one room, and their identity is the
 /// bearer token they were handed when they joined, which is why only its hash is stored.
+///
+/// A row here is also the only link between an account and a hand, through <see cref="UserId"/>,
+/// so it is what a profile's list of games is assembled from.
 /// </summary>
 public class Player
 {
@@ -117,6 +124,16 @@ public class Player
     /// <summary>SHA-256 of the bearer token issued at join time.</summary>
     [MaxLength(32)]
     public byte[] TokenHash { get; set; } = [];
+
+    /// <summary>
+    /// The account that took this seat, when one was signed in at the time. Null for everybody
+    /// else - a bot, or somebody who sat down without registering, both of which stay supported.
+    /// This is the only link between a seat and an account, and it is what a profile's list of
+    /// games is assembled from.
+    /// </summary>
+    public Guid? UserId { get; set; }
+
+    public UserAccount? User { get; set; }
 
     public bool IsBot { get; set; }
 
@@ -293,4 +310,67 @@ public class SettlementRow
     public string Reason { get; set; } = string.Empty;
 
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>
+/// A registered account.
+///
+/// Accounts sit alongside the room-and-seat identity model rather than replacing it: a table still
+/// works with nobody signed in, and a seat is still held by its own bearer token. What an account
+/// adds is a name that outlives one table, so the hands somebody plays across many evenings can be
+/// gathered onto one profile.
+/// </summary>
+public class UserAccount
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+
+    /// <summary>As it was typed, which is how it is shown back.</summary>
+    [MaxLength(24)]
+    public string Username { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The same name folded to lower case, and the column the unique index is on. Usernames are
+    /// first come first served, and "Mynard" must not be free once "mynard" has been taken.
+    /// </summary>
+    [MaxLength(24)]
+    public string UsernameKey { get; set; } = string.Empty;
+
+    /// <summary>PBKDF2-SHA256 of the account password. Never the password itself.</summary>
+    [MaxLength(64)]
+    public byte[] PasswordHash { get; set; } = [];
+
+    [MaxLength(32)]
+    public byte[] PasswordSalt { get; set; } = [];
+
+    public int PasswordIterations { get; set; }
+
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+
+    public DateTimeOffset LastSignedInAt { get; set; } = DateTimeOffset.UtcNow;
+
+    public List<UserSession> Sessions { get; set; } = [];
+}
+
+/// <summary>
+/// One signed-in browser, for one account.
+///
+/// The same shape as <see cref="ReplayToken"/> and for the same reasons: verifying a password
+/// costs 210,000 PBKDF2 iterations, which is fine once at sign-in and far too much on every
+/// request, so it is exchanged for a bearer token whose hash is all that is stored. A row per
+/// browser rather than one per account, so signing out of a phone does not sign out the laptop.
+/// </summary>
+public class UserSession
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+
+    public Guid UserId { get; set; }
+    public UserAccount? User { get; set; }
+
+    /// <summary>SHA-256 of the bearer token handed out when the password was accepted.</summary>
+    [MaxLength(32)]
+    public byte[] TokenHash { get; set; } = [];
+
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+
+    public DateTimeOffset ExpiresAt { get; set; }
 }
