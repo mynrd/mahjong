@@ -47,6 +47,12 @@
 
   /* The action bar's height. Fixed, so the bar never moves - see .actions below. */
   --actions-h: 62px;
+
+  /* The opponent strip's cap on a phone: one card's chrome - border, padding, the two lines the
+     wrapped name and wind take, the gap above the tiles - plus this many rows of tiles under it.
+     See the phone block near the bottom for why the strip is capped at all. */
+  --opp-head: 56px;
+  --opp-rows: 2;
 }
 
 .status {
@@ -639,7 +645,12 @@
    Fixed height, not a floor. The bar is the one part of the table a thumb goes to without looking,
    so it has to be in the same place every turn: everything that used to grow it - a claim's option
    buttons, one button per secret-kang face, a wrapping legend - now opens a sheet or a dialog
-   instead. `overflow: hidden` is the backstop that keeps a long name from finding a way through. */
+   instead. `overflow: hidden` is the backstop that keeps a long name from finding a way through.
+
+   The one exception is a phone with a claim window open, where the bar takes a second row for the
+   whole of that window - see the phone block near the bottom. Everything here still holds: the
+   second row arrives with the window and leaves with it, so the bar is one height for as long as
+   there is anything on it to press. */
 
 .actions {
   display: grid;
@@ -1418,6 +1429,85 @@
   min-height: 32px;
   padding: 6px 12px;
   font-size: 13px;
+}
+
+/* ------------------------------------------------------------------ phone only
+   Everything above is written for the narrow screen already, so this block is small on purpose:
+   it holds the two places where a phone needs a rule a wider screen would be worse for. It is
+   closed at 759px rather than left open, so the cross layout below inherits none of it. */
+
+@media (max-width: 759px) {
+  /* The strip is capped rather than left to grow. Its grid row is `auto`, so three players each
+     holding a kang, four flowers and a hand turned face up make a strip deep enough to eat the
+     discard pool - the pool is the 1fr track, so every pixel the strip takes is one the pool
+     never gets back, and the pile ends up two rows tall with the rest of it scrolled away.
+
+     Two rows of tiles is the floor: enough to see that a set went down and roughly what it was.
+     The rest scrolls, which the strip was already set up for - `overflow-y: auto` is on it above,
+     and it is the scroll container the card-wide open button chains to, so a drag anywhere on a
+     card moves the tiles rather than being swallowed. The row is sized off the meld tile, the
+     tallest of the three rows a card can draw, so two of those fit and not just two rows of
+     backs. */
+  .opponents {
+    max-height: calc(var(--opp-head) + var(--opp-rows) * ((var(--tile-sm) + 4px) * 1.34 + 9px));
+  }
+
+  /* The bar gets a second row while a discard is up for claim, and only then.
+
+     One row cannot hold that window on a phone. The thrown tile, the calls, Options, Pass and Draw
+     is about 480px of buttons across a 360px screen, and the calls - the whole point of the window
+     - are what gave way: they are the only part of the row allowed to shrink, so they collapsed
+     into a sideways scroll a couple of tiles wide while the two ways of saying no sat beside them
+     taking a third of the bar. So the body takes the whole width and the two of them drop under
+     it, centred:
+
+         [tile] [Chow] [Pung] [Kang] [Todas]
+                    [Pass] [Draw]
+
+     That is the whole rule: one line that gives the window back the 150px Pass and Draw were
+     holding. Three calls fit on a 360px screen now and four on a 390px one, where before the
+     change the row had no width left at all - a single call sat entirely off the edge, which is
+     what made a window with a pung in it look like a window with nothing in it.
+
+     Four calls at once still scroll, and that is where it stops. Closing the last gap means
+     splitting the body's own children across the two rows, and every way of doing that leaves the
+     wrap deciding where the break falls: it put Draw on a row of its own with one call up, and
+     took a third row as soon as Take appeared. A scroll is the better trade - the row a thumb is
+     already travelling to has to be where it was a moment ago.
+
+     Pass is the trigger rather than the calls for the same reason. Pass is on the bar for the whole
+     window - while the calls are up, while you hold a call somebody may yet beat, while you are
+     waiting on the others - so the bar is one height from end to end of it, which is also why the
+     buttons on it go dead rather than disappear.
+
+     The height has to give for that, so it is a floor here instead of a fixed height. It is still
+     the last row of a one-screen grid, so the room comes out of the pool above - the same trade
+     the lifted hand makes, and the pool is the only track holding slack for either of them. */
+  .actions {
+    height: auto;
+    min-height: var(--actions-h);
+  }
+
+  .bar {
+    flex-wrap: wrap;
+    row-gap: 8px;
+    justify-content: center;
+  }
+
+  .bar:has(.btn.pass) .bar-body {
+    flex: 1 1 100%;
+  }
+
+  /* Options and Take are the two buttons still sharing the first row with the calls, and at the
+     bar's default padding Options alone is a third of a 360px screen - which comes out of the
+     calls, because they are the only thing on that row allowed to shrink. Padded like the calls
+     beside them instead. It is width the row gets back and nothing else: the 44px floor under
+     every button is untouched, and Pass and Draw are on their own row with a min-width holding
+     them apart, so none of this reaches them. */
+  .bar .claim-buttons .btn {
+    padding: 7px 11px;
+    font-size: 13px;
+  }
 }
 
 /* ------------------------------------------------------------------ bigger screens */
