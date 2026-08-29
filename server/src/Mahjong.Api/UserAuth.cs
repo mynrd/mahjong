@@ -159,12 +159,23 @@ public sealed class UserAuth(MahjongDbContext db, TimeProvider clock)
     {
         var token = PlayerToken.Issue();
 
-        user.Sessions.Add(new UserSession
+        var session = new UserSession
         {
             TokenHash = PlayerToken.HashOf(token),
             CreatedAt = now,
             ExpiresAt = now + Lifetime,
-        });
+        };
+
+        // Added through the set, not only through the navigation. UserSession.Id is filled in by
+        // its property initializer, and an entity EF first meets through the collection of an
+        // account it is already tracking is taken for a row that exists whenever its key is
+        // already set. Sign-in then saved the brand new session as
+        // UPDATE UserSessions ... WHERE Id = <a row nobody has ever inserted>, which matched
+        // nothing and came back as a concurrency failure - every sign-in, not a race.
+        // Registering was fine only because db.Users.Add walks the graph and marks the session
+        // added along with the account.
+        user.Sessions.Add(session);
+        db.UserSessions.Add(session);
 
         return token;
     }
