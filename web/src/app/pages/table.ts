@@ -698,10 +698,24 @@ export class TablePage implements OnDestroy {
     return live && live.tile.id === claim.tile.id ? live : null;
   });
 
+  /**
+   * The pool as it is drawn, which is not always every tile thrown.
+   *
+   * A tile called off the pool is already face up in the claimer's melds, so by default it is not
+   * drawn in the middle as well - the same tile in two places is the confusing part, not the
+   * greying. The server decides, from Mahjong:ShowClaimedDiscards in appsettings.json, and sends
+   * the answer on the view. Everything that reasons about the throw itself - `liveDiscard`, the
+   * landing animation - stays on `view.discards`, which is still the full list either way.
+   */
+  protected readonly pool = computed(() => {
+    const view = this.view();
+    if (!view) return [];
+
+    return view.showClaimedDiscards ? view.discards : view.discards.filter((d) => !d.claimed);
+  });
+
   /** True once the pile is deep enough to be worth drawing smaller. See DENSE_DISCARDS. */
-  protected readonly denseDiscards = computed(
-    () => (this.view()?.discards.length ?? 0) >= DENSE_DISCARDS,
-  );
+  protected readonly denseDiscards = computed(() => this.pool().length >= DENSE_DISCARDS);
 
   /**
    * Reopens the calls off the tile in the pool. Same door as the Options button on the bar.

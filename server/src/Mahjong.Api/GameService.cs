@@ -17,8 +17,15 @@ public sealed class GameService(
     RoomRegistry registry,
     IHubContext<GameHub> hub,
     TimeProvider clock,
-    ILogger<GameService> logger)
+    ILogger<GameService> logger,
+    IConfiguration config)
 {
+    // A tile called off the pool is already face up in the claimer's melds, so drawing a greyed
+    // copy of it in the middle as well shows the same tile in two places. Off by default. Set
+    // Mahjong:ShowClaimedDiscards to true in appsettings.json and restart the server to get the
+    // greyed copies back - read once at construction, so editing the file mid-game does nothing.
+    private readonly bool showClaimedDiscards = config.GetValue("Mahjong:ShowClaimedDiscards", false);
+
     /// <summary>Deals the next hand for a room. Only the host may trigger this.</summary>
     public async Task<Result> StartHandAsync(string code, Guid callerPlayerId, CancellationToken cancel = default)
     {
@@ -543,7 +550,8 @@ public sealed class GameService(
             if (connections.Count == 0) continue;
 
             var view = GameViewBuilder.Build(
-                state, room.Code, seat, seatInfo, session.RevealedSeats, HostSeat(room), session.Proposal);
+                state, room.Code, seat, seatInfo, session.RevealedSeats, HostSeat(room), session.Proposal,
+                showClaimedDiscards);
             await hub.Clients.Clients(connections).SendAsync("StateChanged", view, cancel);
         }
     }
@@ -558,7 +566,8 @@ public sealed class GameService(
         if (room is null) return null;
 
         return GameViewBuilder.Build(
-            state, room.Code, seat, SeatInfo(room, session), session.RevealedSeats, HostSeat(room), session.Proposal);
+            state, room.Code, seat, SeatInfo(room, session), session.RevealedSeats, HostSeat(room), session.Proposal,
+            showClaimedDiscards);
     }
 
     // ------------------------------------------------------------------ persistence

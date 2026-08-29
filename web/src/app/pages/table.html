@@ -223,6 +223,9 @@
       [class.drop-hot]="overPool() && canThrowNow()"
       data-testid="discard-pool"
     >
+      <!-- Keyed on everything thrown, not on what the pool draws: with claimed tiles hidden the
+           pool can be empty while tiles have been thrown, and "No tiles thrown yet" would be a
+           lie. An empty .discards div draws nothing, so there is no hole where it sat. -->
       @if (view.discards.length === 0) {
         <p class="muted empty">No tiles thrown yet.</p>
       } @else {
@@ -232,7 +235,7 @@
              The outline says only that the tile is unanswered, never what your hand could do with
              it, so every seat that has not answered sees exactly the same thing. -->
         <div class="discards" [class.dense]="denseDiscards()">
-          @for (discard of view.discards; track discard.tile.id) {
+          @for (discard of pool(); track discard.tile.id) {
             <mj-tile
               [code]="discard.tile.code"
               [dimmed]="discard.claimed"

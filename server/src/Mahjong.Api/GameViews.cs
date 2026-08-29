@@ -229,7 +229,14 @@ public sealed record PlayerGameView(
     /// ever laid out for you. The client needs it on the view rather than only in the room's rules
     /// because it changes what the table draws, not just what it is allowed to send.
     /// </summary>
-    bool Assisted)
+    bool Assisted,
+    /// <summary>
+    /// Whether the pool still draws the tiles that were called off it. A claimed tile is already
+    /// face up in the claimer's melds, so leaving a greyed copy in the middle shows the same tile
+    /// twice; off, the pool is only the tiles nobody took. Server-side switch, not a house rule:
+    /// see Mahjong:ShowClaimedDiscards in appsettings.json.
+    /// </summary>
+    bool ShowClaimedDiscards)
 {
     public bool IsYourTurn => CurrentSeat == YourSeat && Phase is GamePhase.AwaitingDraw or GamePhase.AwaitingDiscard;
 }
@@ -252,7 +259,8 @@ public static class GameViewBuilder
         IReadOnlyDictionary<int, (string Name, bool IsBot, bool IsConnected, int Balance)> seatInfo,
         IReadOnlySet<int>? revealed = null,
         int? hostSeat = null,
-        NewGameProposal? proposal = null)
+        NewGameProposal? proposal = null,
+        bool showClaimedDiscards = false)
     {
         var seats = new List<SeatStateView>(MahjongGame.Seats);
 
@@ -307,7 +315,8 @@ public static class GameViewBuilder
                 : new NewGameView(
                     proposal.ProposedBySeat,
                     proposal.Accepted.Where(seatInfo.ContainsKey).Order().ToList()),
-            state.Rules.AssistEnabled);
+            state.Rules.AssistEnabled,
+            showClaimedDiscards);
     }
 
     private static IReadOnlyList<HandGroupView> BuildGroups(GameState state, PlayerHand hand) =>

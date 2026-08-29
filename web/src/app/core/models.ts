@@ -180,6 +180,12 @@ export interface PlayerGameView {
    * for you: the claim strip is four bare buttons and Auto Arrange is gone.
    */
   assisted: boolean;
+  /**
+   * Whether the pool still draws the tiles that were called off it, greyed out. A claimed tile is
+   * already face up in the claimer's melds, so on, the same tile shows in two places. Off for
+   * play; the server switch behind it is Mahjong:ShowClaimedDiscards in appsettings.json.
+   */
+  showClaimedDiscards: boolean;
 }
 
 export interface SeatView {
