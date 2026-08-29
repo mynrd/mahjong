@@ -429,8 +429,10 @@ public static class GameViewBuilder
             .Select(face => face.Code)
             .ToList();
 
-        var canWin = state.JustDrew is not null
-            && HandAnalyzer.Analyze(hand.Concealed, hand.Melds, state.Joker, state.Rules).IsWin;
+        // Asked of the whole hand, not of how it got here. A pung or chow that finishes the hand
+        // leaves 17 tiles with nothing drawn, and that is still a win - so the seat is offered
+        // Todas rather than being left with Discard as its only move.
+        var canWin = HandAnalyzer.Analyze(hand.Concealed, hand.Melds, state.Joker, state.Rules).IsWin;
 
         return new TurnOptionsView(CanDiscard: true, canWin, secretKangs, sagasas);
     }

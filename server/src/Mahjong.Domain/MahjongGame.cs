@@ -1,4 +1,4 @@
-using System.Diagnostics.CodeAnalysis;
+﻿using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 
 namespace Mahjong.Domain;
@@ -101,7 +101,7 @@ public static class MahjongGame
 		List<GameEvent> list = new List<GameEvent>();
 		if (state.Phase == GamePhase.AwaitingClaims)
 		{
-			PendingClaim pending = state.Pending;
+			PendingClaim? pending = state.Pending;
 			if (pending != null && seat == GameState.NextSeat(state.CurrentSeat))
 			{
 				Require(!pending.Declared.Any<KeyValuePair<int, DeclaredClaim>>((KeyValuePair<int, DeclaredClaim> kv) => kv.Key != seat && kv.Value.AwaitingTiles), "Somebody has called that tile and is still choosing which tiles it costs.");
@@ -229,8 +229,8 @@ public static class MahjongGame
 		Require(state.Phase == GamePhase.AwaitingClaims && state.Pending != null, "That tile is no longer up for a claim.");
 		PendingClaim pending = state.Pending;
 		Require(seat != pending.FromSeat, "You threw that tile, so you cannot claim it.");
-		DeclaredClaim valueOrDefault = pending.Declared.GetValueOrDefault(seat);
-		Require((object)valueOrDefault == null || !valueOrDefault.AwaitingTiles || valueOrDefault.Kind != kind || tileIds.Count > 0, $"You have already called {kind}. Now tap the tiles in your hand it costs.", "AlreadyPressed");
+		DeclaredClaim? valueOrDefault = pending.Declared.GetValueOrDefault(seat);
+		Require(valueOrDefault is null || !valueOrDefault.AwaitingTiles || valueOrDefault.Kind != kind || tileIds.Count > 0, $"You have already called {kind}. Now tap the tiles in your hand it costs.", "AlreadyPressed");
 		bool condition = LiveKinds(state, pending, seat).Contains(kind);
 		(int, ClaimKind, bool)? tuple = StandingCall(state, pending);
 		object message;
@@ -304,7 +304,7 @@ public static class MahjongGame
 	{
 		if (state.Phase == GamePhase.AwaitingClaims)
 		{
-			PendingClaim pending = state.Pending;
+			PendingClaim? pending = state.Pending;
 			if (pending != null)
 			{
 				DateTimeOffset? deadlineUtc = pending.DeadlineUtc;
@@ -402,14 +402,25 @@ public static class MahjongGame
 	public static List<GameEvent> DeclareTodasOnDraw(GameState state, int seat)
 	{
 		Require(state.Phase == GamePhase.AwaitingDiscard && seat == state.CurrentSeat, "You cannot declare todas right now.");
-		Require(state.JustDrew.HasValue, "There is no drawn tile to win on.");
 		PlayerHand playerHand = state.Hands[seat];
 		Require(HandAnalyzer.Analyze(playerHand.Concealed, playerHand.Melds, state.Joker, state.Rules).IsWin, "Your hand is not complete.");
-		int num = 1;
-		List<GameEvent> list = new List<GameEvent>(num);
-		CollectionsMarshal.SetCount(list, num);
-		CollectionsMarshal.AsSpan(list)[0] = EndWithWin(state, seat, null, state.JustDrew.Value.Tile, bisaklat: false);
-		return list;
+		if (state.JustDrew.HasValue)
+		{
+			return [EndWithWin(state, seat, null, state.JustDrew.Value.Tile, bisaklat: false)];
+		}
+		// No drawn tile, so the hand was finished by the discard the claim just took. That tile is
+		// the last entry in Discards - ApplyClaim marks it claimed - and its Seat is who threw it.
+		// Naming both is what keeps this an ordinary discard win instead of bunot.
+		Require(state.Discards.Count > 0 && state.Discards[^1].Claimed && playerHand.Melds.Count > 0, "There is no winning tile to declare on.");
+		DiscardedTile discardedTile = state.Discards[^1];
+		ExposedMeld claimed = playerHand.Melds[^1];
+		// Rewind the claim for the scorer: the tiles the group cost go back in hand and the group
+		// comes back off the table, so this is scored as the very same win that pressing Todas in
+		// the claim window would have produced. Same hand, same money, whichever button was used.
+		List<Tile> concealedBefore = playerHand.ConcealedFaces.ToList();
+		concealedBefore.AddRange(claimed.Tiles.Where((TileRef t) => t.Id != discardedTile.Tile.Id).Select((TileRef t) => t.Tile));
+		List<ExposedMeld> meldsBefore = playerHand.Melds.Take(playerHand.Melds.Count - 1).ToList();
+		return [EndWithWin(state, seat, discardedTile.Seat, discardedTile.Tile.Tile, bisaklat: false, concealedBefore, meldsBefore)];
 	}
 
 	public static IReadOnlyDictionary<int, IReadOnlyList<ClaimKind>> AllowedClaims(GameState state, TileRef discard, int fromSeat)
@@ -625,7 +636,7 @@ public static class MahjongGame
 
 	private static List<GameEvent> TryCloseClaimWindow(GameState state, DateTimeOffset now, bool forced)
 	{
-		PendingClaim pending = state.Pending;
+		PendingClaim pending = state.Pending!;
 		if (!forced && pending.Declared.Values.Any((DeclaredClaim c) => c.AwaitingTiles))
 		{
 			return new List<GameEvent>();
@@ -850,10 +861,17 @@ public static class MahjongGame
 		};
 	}
 
-	private static HandEnded EndWithWin(GameState state, int winnerSeat, int? discarderSeat, Tile winningTile, bool bisaklat)
+	/// <param name="concealedBefore">
+	/// The hand as it stood before the winning tile arrived, when that is not what the seat is
+	/// holding now. A win declared after a pung has already folded the winning tile into a meld,
+	/// and the scorer adds it back itself, so it has to be handed the state before the claim.
+	/// </param>
+	/// <param name="meldsBefore">The groups on the table at that same moment.</param>
+	private static HandEnded EndWithWin(GameState state, int winnerSeat, int? discarderSeat, Tile winningTile, bool bisaklat, IReadOnlyList<Tile>? concealedBefore = null, IReadOnlyList<ExposedMeld>? meldsBefore = null)
 	{
 		PlayerHand playerHand = state.Hands[winnerSeat];
-		List<Tile> list = playerHand.ConcealedFaces.ToList();
+		List<Tile> list = (concealedBefore ?? playerHand.ConcealedFaces).ToList();
+		IReadOnlyList<ExposedMeld> melds = meldsBefore ?? playerHand.Melds;
 		if (!discarderSeat.HasValue)
 		{
 			int num = list.IndexOf(winningTile);
@@ -862,7 +880,7 @@ public static class MahjongGame
 				list.RemoveAt(num);
 			}
 		}
-		WinInput input = new WinInput(list, playerHand.Melds, winningTile, !discarderSeat.HasValue, state.Discards.Count((DiscardedTile d) => !d.Claimed), state.Joker, bisaklat);
+		WinInput input = new WinInput(list, melds, winningTile, !discarderSeat.HasValue, state.Discards.Count((DiscardedTile d) => !d.Claimed), state.Joker, bisaklat);
 		HandScore score = Scorer.Score(input, state.Rules);
 		IReadOnlyList<Settlement> settlements = Scorer.Settle(score, winnerSeat, discarderSeat, state.Rules);
 		HandOutcome outcome = (state.Outcome = new HandOutcome(bisaklat ? HandEndReason.Bisaklat : HandEndReason.Todas, winnerSeat, score, settlements));

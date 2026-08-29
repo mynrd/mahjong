@@ -127,6 +127,39 @@ public class ClaimCandidateTests
     }
 
     [Fact]
+    public void A_pung_that_also_finishes_the_hand_offers_todas_first()
+    {
+        // Seat 3 has four groups already down and B5 B5 C9 C9 left in hand. The B5 thrown makes
+        // the fifth group, and the C9s are the pair - so the same press that would pung it wins
+        // the hand outright. Todas has to be on the window, and has to be the first thing on it.
+        var table = TestTable.Build(t => t
+            .Meld(3, SetKind.Chow, "123d")
+            .Meld(3, SetKind.Chow, "456d")
+            .Meld(3, SetKind.Chow, "789d")
+            .Meld(3, SetKind.Chow, "234c")
+            .Hand(3, "55b 99c")
+            .Filler(1, 16, Contested)
+            .Filler(2, 16, Contested)
+            .Hand(0, "5b").Filler(0, 16, Contested));
+
+        var candidates = CandidatesFor(table, 3);
+
+        Assert.Equal([ClaimKind.Todas, ClaimKind.Pung], candidates.Select(c => c.Kind));
+        Assert.Equal(["Todas", "Pung B5"], candidates.Select(c => c.Describe(new TileRef(table.HeldId(0, Contested)))));
+
+        // And pressing it ends the hand there, rather than melding a pung and playing on.
+        MahjongGame.Discard(table.State, 0, table.HeldId(0, Contested), Now);
+        MahjongGame.Claim(table.State, 3, ClaimKind.Todas, [], Now);
+        var events = PassRest(table, claimant: 3);
+
+        var ended = events.OfType<HandEnded>().Single();
+
+        Assert.Equal(HandEndReason.Todas, ended.Outcome.Reason);
+        Assert.Equal(3, ended.Outcome.WinnerSeat);
+        Assert.Equal(GamePhase.HandOver, table.State.Phase);
+    }
+
+    [Fact]
     public void A_seat_that_is_not_on_the_discarders_left_gets_no_chow_candidate()
     {
         var table = TestTable.Build(t => t

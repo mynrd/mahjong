@@ -1,4 +1,4 @@
-using Mahjong.Domain;
+﻿using Mahjong.Domain;
 
 namespace Mahjong.Domain.Tests;
 
@@ -315,6 +315,83 @@ public class GameFlowTests
         Assert.Equal(HandEndReason.Todas, ended.Outcome.Reason);
         Assert.Equal(2, ended.Outcome.WinnerSeat);
         Assert.Equal(GamePhase.HandOver, table.State.Phase);
+    }
+
+    /// <summary>
+    /// Seat 3 has four groups down and 5c 5c 9b 9b in hand. Punging the thrown 5 chars makes the
+    /// fifth group and leaves the 9 sticks as the pair - the hand is complete standing there, with
+    /// nothing drawn. Discard used to be the only move it had.
+    /// </summary>
+    private static TestTable PungThatFinishesTheHand(string tail = "99b")
+    {
+        var table = TestTable.Build(t => t
+            .Meld(3, SetKind.Chow, "123d")
+            .Meld(3, SetKind.Chow, "456d")
+            .Meld(3, SetKind.Chow, "789d")
+            .Meld(3, SetKind.Chow, "234b")
+            .Hand(3, $"55c {tail}")
+            .Filler(1, 16, Contested)
+            .Filler(2, 16, Contested)
+            .Hand(0, "5c").Filler(0, 16, Contested));
+
+        MahjongGame.Discard(table.State, 0, table.HeldId(0, Contested), Now);
+        MahjongGame.Claim(table.State, 3, ClaimKind.Pung, [], Now);
+        MahjongGame.Pass(table.State, 1, Now);
+        MahjongGame.Pass(table.State, 2, Now);
+
+        Assert.Equal(GamePhase.AwaitingDiscard, table.State.Phase);
+        Assert.Equal(3, table.State.CurrentSeat);
+        Assert.Null(table.State.JustDrew);
+
+        return table;
+    }
+
+    [Fact]
+    public void A_pung_that_completes_the_hand_can_still_be_declared_as_todas()
+    {
+        var table = PungThatFinishesTheHand();
+
+        var ended = MahjongGame.DeclareTodasOnDraw(table.State, 3).OfType<HandEnded>().Single();
+
+        Assert.Equal(HandEndReason.Todas, ended.Outcome.Reason);
+        Assert.Equal(3, ended.Outcome.WinnerSeat);
+        Assert.Equal(GamePhase.HandOver, table.State.Phase);
+    }
+
+    [Fact]
+    public void A_win_declared_after_a_pung_is_paid_by_the_thrower_and_is_not_bunot()
+    {
+        // The winning tile came off seat 0's throw. Declaring it on your own turn rather than in
+        // the claim window must not turn it into a self-drawn win: bunot doubles the total and
+        // spreads the cost over all three seats instead of charging the one who fed it.
+        var table = PungThatFinishesTheHand();
+
+        var ended = MahjongGame.DeclareTodasOnDraw(table.State, 3).OfType<HandEnded>().Single();
+        var score = ended.Outcome.Score!;
+        var settlements = ended.Outcome.Settlements.ToDictionary(s => s.Seat);
+
+        Assert.Equal(score.BaseUnits + score.BonusUnits, score.TotalUnits);
+
+        var fed = score.TotalUnits * RuleOptions.Default.Scoring.DiscarderMultiplier;
+
+        Assert.Equal(-fed, settlements[0].Delta);
+        Assert.Equal("Fed the winning tile", settlements[0].Reason);
+        Assert.Equal(-score.TotalUnits, settlements[1].Delta);
+        Assert.Equal(-score.TotalUnits, settlements[2].Delta);
+        Assert.Equal(fed + score.TotalUnits * 2, settlements[3].Delta);
+    }
+
+    [Fact]
+    public void A_pung_that_leaves_two_odd_tiles_is_still_only_a_discard()
+    {
+        // The guard the change hangs on: 9b 8b left in hand is not a pair, so there is nothing to
+        // declare and the seat has to throw one.
+        var table = PungThatFinishesTheHand(tail: "89b");
+
+        var error = Assert.Throws<IllegalMoveException>(() => MahjongGame.DeclareTodasOnDraw(table.State, 3));
+
+        Assert.Contains("not complete", error.Message);
+        Assert.Equal(GamePhase.AwaitingDiscard, table.State.Phase);
     }
 
     [Fact]
