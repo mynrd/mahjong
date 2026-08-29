@@ -123,7 +123,7 @@ web/                           Angular 22, standalone components and signals
   public/tiles/                42 tile faces plus the back
 e2e/                           Playwright specs and screenshots
 run.ps1                        builds the page, starts the server, prints the link to share
-tools/                         firewall rules
+tools/                         firewall rules, and password resets for a room or an account
 ```
 
 ---
