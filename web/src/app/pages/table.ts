@@ -381,6 +381,15 @@ export class TablePage implements OnDestroy {
   /** The tile blown up on screen, or null. Held as an id so a tile that leaves takes the sheet. */
   protected readonly zoomedId = signal<number | null>(null);
 
+  /**
+   * Whether the discard up for claim has been tapped to blow it up.
+   *
+   * A flag rather than a tile, because the discard is not in your hand and `zoomedTile` below
+   * resolves out of `me().concealed` - it cannot find this one. Reading the face back off the live
+   * claim also means a window that closes under the sheet takes the sheet with it.
+   */
+  protected readonly claimZoom = signal(false);
+
   /** The tile being dragged, what it is over, and where to draw the ghost. */
   protected readonly dragged = signal<number | null>(null);
   protected readonly dropTarget = signal<DropSlot | null>(null);
@@ -1887,6 +1896,25 @@ export class TablePage implements OnDestroy {
 
   protected closeZoom(): void {
     this.zoomedId.set(null);
+  }
+
+  /**
+   * The thrown tile the player has tapped to enlarge, or null.
+   *
+   * At 30px on the bar a 4-dots and a 5-dots are a counting exercise on a phone, and that tile is
+   * the whole question the window is asking. One tap blows it up; nothing else about the window
+   * moves, and the calls stay where the thumb left them.
+   */
+  protected readonly zoomedDiscard = computed<TileView | null>(() =>
+    this.claimZoom() ? (this.pendingClaim()?.tile ?? null) : null,
+  );
+
+  protected openClaimZoom(): void {
+    this.claimZoom.set(true);
+  }
+
+  protected closeClaimZoom(): void {
+    this.claimZoom.set(false);
   }
 
   protected toggleZoom(): void {

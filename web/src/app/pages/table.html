@@ -701,13 +701,24 @@
                 data-testid="claim-strip"
               >
                 <div class="claim-tile">
-                  <mj-tile
-                    [code]="pending.tile.code"
-                    [highlight]="!claimWins()"
-                    [hint]="claimWins() ? 'win' : 'none'"
-                    [badgeText]="claimWins() ? '!' : null"
-                    [joker]="isJoker(pending.tile.code)"
-                  />
+                  <!-- Tappable, because 30px of tile on a phone is not enough to be sure a 4-dots
+                       is not a 5-dots, and that tile is the whole question. It opens the sheet and
+                       does nothing else: the calls do not move and no answer is given by it. -->
+                  <button
+                    class="tile-zoom"
+                    type="button"
+                    (click)="openClaimZoom()"
+                    [attr.aria-label]="'Enlarge ' + label(pending.tile.code)"
+                    data-testid="claim-strip-zoom"
+                  >
+                    <mj-tile
+                      [code]="pending.tile.code"
+                      [highlight]="!claimWins()"
+                      [hint]="claimWins() ? 'win' : 'none'"
+                      [badgeText]="claimWins() ? '!' : null"
+                      [joker]="isJoker(pending.tile.code)"
+                    />
+                  </button>
                   @if (claimTimed()) {
                     <span class="countdown" data-testid="claim-strip-countdown"
                       >{{ claimSeconds() }}s</span
@@ -958,13 +969,21 @@
           [attr.data-from-seat]="pending.fromSeat"
         >
           <header class="claim-head">
-            <mj-tile
-              [code]="pending.tile.code"
-              [highlight]="!claimWins()"
-              [hint]="claimWins() ? 'win' : 'none'"
-              [badgeText]="claimWins() ? '!' : null"
-              [joker]="isJoker(pending.tile.code)"
-            />
+            <button
+              class="tile-zoom"
+              type="button"
+              (click)="openClaimZoom()"
+              [attr.aria-label]="'Enlarge ' + label(pending.tile.code)"
+              data-testid="claim-head-zoom"
+            >
+              <mj-tile
+                [code]="pending.tile.code"
+                [highlight]="!claimWins()"
+                [hint]="claimWins() ? 'win' : 'none'"
+                [badgeText]="claimWins() ? '!' : null"
+                [joker]="isJoker(pending.tile.code)"
+              />
+            </button>
 
             <div class="claim-what">
               <strong
@@ -1242,6 +1261,41 @@
             type="button"
             (click)="closeZoom()"
             data-testid="tile-zoom-close"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    }
+
+    <!-- The thrown tile, blown up. Read-only on purpose: every way of answering the window is on
+         the bar or in the dialog behind this, and a call fired from here would be a call made from
+         a sheet that covers the calls. Closing it puts the window back exactly as it was. -->
+    @if (zoomedDiscard(); as tile) {
+      <div class="sheet" (click)="closeClaimZoom()">
+        <div
+          class="sheet-body panel"
+          role="dialog"
+          [attr.aria-label]="label(tile.code)"
+          (click)="$event.stopPropagation()"
+          data-testid="claim-zoom"
+        >
+          <div class="zoom-tile">
+            <mj-tile
+              [code]="tile.code"
+              [hint]="claimWins() ? 'win' : 'none'"
+              [badgeText]="claimWins() ? '!' : null"
+              [joker]="isJoker(tile.code)"
+            />
+          </div>
+
+          <p class="confirm-what" data-testid="claim-zoom-label">{{ label(tile.code) }}</p>
+
+          <button
+            class="btn wide secondary"
+            type="button"
+            (click)="closeClaimZoom()"
+            data-testid="claim-zoom-close"
           >
             Close
           </button>

@@ -847,12 +847,32 @@
   white-space: nowrap;
 }
 
+/* 30px was a tile you had to already know to read. The button around it is 44px wide whatever the
+   tile is, so the row pays for the touch target either way - the tile may as well fill it. */
 .claim-tile {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
   gap: 8px;
-  --tile-w: 30px;
+  --tile-w: 38px;
+}
+
+/* The wrapper that makes a thrown tile tappable, on the bar and in the dialog head. Nothing but a
+   hit area: no border, no background, no padding, so the tile inside it looks exactly as it did
+   before it became a button. The 44px floor is the thumb target - the tile itself is 30px on the
+   bar, which is under every touch guideline going, so the button is what carries the size. */
+.tile-zoom {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 44px;
+  min-height: 44px;
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: 0;
+  cursor: zoom-in;
 }
 
 .countdown {
@@ -889,11 +909,27 @@
 
 .claim-dialog {
   position: fixed;
-  top: max(8px, env(safe-area-inset-top));
+
+  /* How much of the bottom of the screen belongs to your hand and the action bar, and so is not
+     the dialog's to sit in. The floor in px is for a short screen where 40dvh is not enough to
+     clear a two-row hand plus the bar; the dvh half is for a tall phone, where a fixed 300px would
+     leave the dialog sitting lower than the middle of the table looks. */
+  --claim-floor: max(300px, 40dvh);
+  --claim-ceiling: max(8px, env(safe-area-inset-top));
+
+  /* Centred in what is left over rather than in the viewport. Straight centring puts it over the
+     hand, and taking a discard by hand means tapping tiles in that hand while this is open - see
+     the note above. So it is centred in the band between the top of the screen and the top of your
+     box, which is where the table is anyway, and reads as the middle. */
+  top: calc((var(--claim-ceiling) + 100dvh - var(--claim-floor)) / 2);
   left: 50%;
-  transform: translateX(-50%);
+
+  /* Pulled out so the drop-in keyframe can start 14px above wherever the dialog rests, whether
+     that is the middle of the band or the top of a landscape screen. */
+  --claim-y: -50%;
+  transform: translate(-50%, var(--claim-y));
   width: min(430px, calc(100vw - 16px));
-  max-height: 54dvh;
+  max-height: calc(100dvh - var(--claim-floor) - var(--claim-ceiling) - 8px);
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 10px 12px 16px;
@@ -903,11 +939,13 @@
   z-index: 26;
 }
 
+/* The thrown tile leads the dialog, so it is drawn at a size you can actually read a rank off
+   rather than at hand size. Everything else in the header is text that shrinks around it. */
 .claim-head {
   display: flex;
   align-items: center;
   gap: 10px;
-  --tile-w: 38px;
+  --tile-w: 54px;
 }
 
 .claim-what {
@@ -969,12 +1007,15 @@
   text-transform: uppercase;
 }
 
+/* The drawn set is the reason this row is not just the word "Chow", so it gets the width. A kang
+   is four of these plus the gaps, which is about 190px of the 430px the dialog has - the kind
+   label on the left takes what is left and wraps if it has to. */
 .option .combo {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 3px;
-  --tile-w: 32px;
+  --tile-w: 44px;
 }
 
 .option.danger {
@@ -1532,11 +1573,11 @@
   }
 
   .claim-head {
-    --tile-w: 46px;
+    --tile-w: 64px;
   }
 
   .option .combo {
-    --tile-w: 38px;
+    --tile-w: 52px;
   }
 
   .opponents {
@@ -1645,19 +1686,23 @@
     --actions-h: 54px;
   }
 
-  /* Landscape leaves almost nothing above the hand, so the dialog takes what there is and scrolls
-     rather than reaching down over the tiles it is asking about. */
+  /* Landscape leaves almost nothing above the hand, so there is no band to centre in: the dialog
+     goes back to the top of the screen and scrolls. Centring it here would put a 100px-tall box in
+     the middle of a 400px screen, which is worse than the pinned one on both counts. Tap the tile
+     in the header to read it - that is what the enlarge sheet is for on a screen this short. */
   .claim-dialog {
+    top: max(8px, env(safe-area-inset-top));
     max-height: 78dvh;
+    --claim-y: 0px;
     --tile-w: 26px;
   }
 
   .claim-head {
-    --tile-w: 30px;
+    --tile-w: 40px;
   }
 
   .option .combo {
-    --tile-w: 26px;
+    --tile-w: 34px;
   }
 
   /* One row on a short screen: two would leave the action bar off the bottom. */
@@ -1826,15 +1871,16 @@
   animation: sheet-in 220ms cubic-bezier(0.2, 0.9, 0.25, 1);
 }
 
-/* Drops in from above rather than scaling: it is anchored to the top edge, and a scale from the
-   centre of a top-anchored panel reads as a jump. */
+/* Drops in from above rather than scaling: it lands over the table the player is already reading,
+   and a scale from its own centre reads as a jump. --claim-y is where it rests - the middle of the
+   band in portrait, the top edge in landscape - so the same 14px drop works for both. */
 .claim-dialog {
   animation: drop-in 200ms cubic-bezier(0.2, 0.9, 0.25, 1);
 }
 
 @keyframes drop-in {
   from {
-    transform: translate(-50%, -14px);
+    transform: translate(-50%, calc(var(--claim-y) - 14px));
     opacity: 0;
   }
 }
