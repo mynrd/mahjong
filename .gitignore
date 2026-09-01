@@ -75,6 +75,12 @@ secrets.json
 *.ldf
 *.ndf
 
+# ---------------------------------------------------------------- local tooling
+#
+# Claude Code settings hold machine-specific paths and permission grants. Local only.
+
+.claude/
+
 # ---------------------------------------------------------------- editors
 #
 # Anchored to the root on purpose. An unanchored `.vscode/` would also swallow web/.vscode, and

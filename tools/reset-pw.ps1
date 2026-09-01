@@ -30,10 +30,10 @@
     Overrides the connection string. Read from server/src/Mahjong.Api/appsettings.json otherwise.
 
 .EXAMPLE
-    .\tools\reset-pw.ps1 mynrd "pass"
+    .\tools\reset-pw.ps1 alice "pass"
 
 .EXAMPLE
-    .\tools\reset-pw.ps1 -Username mynrd -Password "correct horse battery"
+    .\tools\reset-pw.ps1 -Username alice -Password "correct horse battery"
 
 .EXAMPLE
     .\tools\reset-pw.ps1 5B0E1E6A-9E5B-4A0E-9A7C-2C0C0F2A11D4 "pass"
@@ -121,7 +121,7 @@ $guid = [guid]::Empty
 $isGuid = [guid]::TryParse($Username, [ref] $guid)
 
 # Matched on UsernameKey rather than Username, because that is the column the unique index is on
-# and folding case is exactly what makes "Mynrd" and "mynrd" one account at sign-in.
+# and folding case is exactly what makes "Alice" and "alice" one account at sign-in.
 $key = $Username.Trim().ToLowerInvariant() -replace "'", "''"
 
 $lookup = if ($isGuid) {

@@ -4,15 +4,24 @@ Four-player Filipino Mahjong over the local network. One player makes a table, s
 the other three type the table password to sit down. Registering is optional and sits over the top
 of that: sign in first and every hand you play is kept on a profile you can read back later.
 
-- [PLAN.md](./PLAN.md) - architecture and build order
 - [RULES.md](./RULES.md) - the ruleset the engine implements, and where published sources disagree
 
 ---
 
-## Running it
+## Prerequisites
 
-Everything runs on one Windows machine. SQL Server must be running on the default instance (`.`);
-the database `MahjongDb` is created automatically on first start.
+Everything runs on one Windows machine:
+
+- **Windows** - the run and firewall scripts are PowerShell, and the server talks to SQL Server
+  over Windows authentication
+- **SQL Server** on the default instance (`.`) - Express or Developer edition is fine; the
+  database `MahjongDb` is created automatically on first start
+- **.NET SDK 10** - see `global.json`
+- **Node.js** - for building the Angular web app (`cd web; npm install` once)
+
+---
+
+## Running it
 
 ```powershell
 # once, as administrator, so phones on the same wifi can connect
@@ -142,7 +151,7 @@ real database. Point it at a network address to test as a phone would:
 
 ```powershell
 cd e2e
-$env:WEB_URL = 'http://192.168.254.100:5080'; npx playwright test
+$env:WEB_URL = 'http://192.168.1.42:5080'; npx playwright test
 ```
 
 ### The one test worth knowing about
@@ -159,7 +168,7 @@ That test is what stops a convenience property or a reused DTO quietly making it
 **Only 108 of the 144 tiles are playable.** In Filipino Mahjong the winds and dragons are bonus
 tiles, like the flowers and seasons: exposed when drawn, replaced, never part of a hand. Hands are
 16 tiles, 17 to win. This is the biggest difference from Riichi or Hong Kong mahjong and it is why
-the win detection only ever deals with three numbered suits.
+the win detection only ever deals with three numbered suits. RULES.md covers the full ruleset.
 
 **House rules are data, not code.** Published Filipino rules disagree on nearly every money value
 and on several mechanics. The disagreements are listed in RULES.md section 7 and each one is a flag
@@ -212,3 +221,10 @@ to load. See `web/public/tiles/ATTRIBUTION.txt`.
 - Money is a plain unit count. No currency, no rounding rules.
 - The bots are deliberately weak: they take a win if they see one and otherwise throw their least
   useful tile. They never claim discards.
+
+---
+
+## License
+
+[MIT](./LICENSE). The tile artwork has its own terms, listed above and in
+`web/public/tiles/ATTRIBUTION.txt`.
